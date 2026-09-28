@@ -1,0 +1,49 @@
+# ---- Build outputs -------------------------------------------------------
+/build/
+/app/build/
+/native/build/
+/dist/
+
+# ---- Gradle --------------------------------------------------------------
+.gradle/
+*.gradle.lockfile
+local.properties
+
+# ---- CMake / native ------------------------------------------------------
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ---- IDE / Editor --------------------------------------------------------
+.idea/
+.vscode/
+*.iml
+.DS_Store
+*.swp
+*~
+
+# ---- iOS / macOS ---------------------------------------------------------
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+build/
+Build/
+*.moved-aside
+
+# ---- Packages / archives -------------------------------------------------
+*.deb
+*.zip
+*.tar.gz
+*.ipa
+*.dSYM/
+
+# ---- Misc ----------------------------------------------------------------
+*.log
+.cache/

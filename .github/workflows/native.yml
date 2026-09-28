@@ -1,0 +1,147 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'native/**'
+      - '.github/workflows/native.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'native/**'
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Native client: Linux build + tests
+  # ---------------------------------------------------------------------------
+  native-linux:
+    name: Native (Linux GCC)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build ccache \
+            libbluetooth-dev libncursesw5-dev
+
+      - name: Configure (Release)
+        run: cmake -S . -B ../build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build ../build/native -j
+
+      - name: Test
+        run: ctest --test-dir ../build/native --output-on-failure -E 'discovery' --timeout 30
+
+      - name: Package (.deb)
+        run: cpack -G DEB -B ../build/native
+        working-directory: build/native
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfd_transfer-linux-deb
+          path: build/native/*.deb
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Native client: Windows cross-compile via MinGW-w64
+  # ---------------------------------------------------------------------------
+  native-windows:
+    name: Native (Windows MinGW cross)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW-w64 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            mingw-w64 g++-mingw-w64-x86_64-posix
+
+      - name: Configure (cross)
+        run: |
+          cmake -S . -B ../build/win64 -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-x86_64.cmake \
+                -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build ../build/win64 -j --target wfd_transfer
+
+      - name: Static-link sanity check (no libstdc++ DLL)
+        run: |
+          if x86_64-w64-mingw32-objdump -p ../build/win64/wfd_transfer.exe \
+               | grep -E 'DLL Name: (libstdc|libgcc|libwinpthread)'; then
+            echo "ERROR: dynamic runtime DLLs detected" >&2
+            exit 1
+          fi
+          echo "OK: fully static"
+
+      - name: Package (.zip)
+        run: cpack -G ZIP -B ../build/win64
+        working-directory: build/win64
+
+      - name: Upload .zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfd_transfer-windows-zip
+          path: build/win64/*.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Android build (Gradle)
+  # ---------------------------------------------------------------------------
+  android:
+    name: Android (Gradle)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build debug APK
+        run: |
+          cd ..
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Run unit tests
+        run: |
+          cd ..
+          ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

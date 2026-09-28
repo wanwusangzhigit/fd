@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WiFi Direct File Transfer</string>
+
+    <!-- Headers -->
+    <string name="header_transport">Transfer Method</string>
+    <string name="header_devices">Discovered Devices</string>
+    <string name="header_transfers">Transfers</string>
+
+    <!-- Buttons -->
+    <string name="discover_wifi">Discover Wi-Fi Direct</string>
+    <string name="discover_bt">Discover Bluetooth</string>
+    <string name="start_bt_server">Listen (Bluetooth)</string>
+    <string name="disconnect_wifi">Disconnect Wi-Fi</string>
+    <string name="pick_file">Pick File to Send</string>
+
+    <!-- Status -->
+    <string name="wifi_idle">Wi-Fi Direct: idle</string>
+    <string name="bt_idle">Bluetooth: idle</string>
+    <string name="bt_enabled_status">Bluetooth: on</string>
+    <string name="bt_disabled_status">Bluetooth: off</string>
+    <string name="empty_devices">No devices yet. Tap Discover above.</string>
+    <string name="send_hint">Tap a device below to send the selected file(s).</string>
+    <string name="selected_file_label">Selected: %1$s (%2$s)</string>
+
+    <!-- Toasts / messages -->
+    <string name="no_file_selected">No file selected</string>
+    <string name="toast_file_selected">File selected. Now pick a peer to send to.</string>
+    <string name="toast_received">Received: %1$s</string>
+    <string name="toast_sending_via_wfd">Sending %1$s via Wi-Fi Direct…</string>
+    <string name="pick_file_first">Pick a file first</string>
+    <string name="connecting_to">Connecting to %1$s…</string>
+    <string name="connecting_bt">Connecting via Bluetooth to %1$s…</string>
+    <string name="bt_connect_failed">Bluetooth connection failed</string>
+    <string name="no_owner_addr">No group owner address yet</string>
+    <string name="waiting_peer_ip">Waiting for peer to register its IP…</string>
+    <string name="wifi_p2p_unsupported">Wi-Fi Direct not supported on this device</string>
+    <string name="bt_unsupported">Bluetooth not supported</string>
+    <string name="bt_enabled">Bluetooth enabled</string>
+    <string name="bt_still_disabled">Bluetooth still disabled</string>
+    <string name="bt_perm_denied">Bluetooth permission denied</string>
+    <string name="bt_listening">Listening for incoming Bluetooth transfers…</string>
+    <string name="cancel_no_handle">Could not cancel (no longer tracked)</string>
+    <string name="open_failed">Could not open the file</string>
+    <string name="wfd_group_owner">Group owner @ %1$s</string>
+    <string name="wfd_client">Connected as client @ %1$s</string>
+
+    <!-- 通知渠道 -->
+    <string name="notif_channel_name">File transfers</string>
+    <string name="notif_channel_desc">Shows ongoing and completed file transfers</string>
+    <string name="notif_ready">Ready to receive files</string>
+    <string name="notif_transferring">Transferring… %1$d%%</string>
+
+    <!-- Adapters -->
+    <string name="cancel">Cancel</string>
+    <string name="transport_wfd">Wi-Fi Direct</string>
+    <string name="transport_bt">Bluetooth</string>
+    <string name="unnamed_device">(unnamed)</string>
+    <string name="status_failed">Failed</string>
+    <string name="status_canceled">Canceled</string>
+    <string name="status_done">Done</string>
+    <string name="status_completed">Completed</string>
+    <string name="status_transferring">Transferring…</string>
+
+    <!-- History -->
+    <string name="history">History</string>
+    <string name="history_title">Transfer history</string>
+    <string name="history_empty">No transfers yet</string>
+
+    <!-- Plurals -->
+    <plurals name="toast_files_selected">
+        <item quantity="one">File selected. Now pick a peer to send to.</item>
+        <item quantity="other">%d files selected. Now pick a peer to send them.</item>
+    </plurals>
+    <plurals name="selected_files_label">
+        <item quantity="one">Selected: %2$s — %3$s</item>
+        <item quantity="other">Selected %1$d files (%2$s): %3$s</item>
+    </plurals>
+    <plurals name="toast_sending_via_wfd_batch">
+        <item quantity="one">Sending 1 file via Wi-Fi Direct…</item>
+        <item quantity="other">Sending %d files via Wi-Fi Direct…</item>
+    </plurals>
+</resources>

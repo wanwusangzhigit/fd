@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WiFi Direct 文件互传</string>
+
+    <!-- 区段标题 -->
+    <string name="header_transport">传输方式</string>
+    <string name="header_devices">发现的设备</string>
+    <string name="header_transfers">传输列表</string>
+
+    <!-- 按钮 -->
+    <string name="discover_wifi">发现 Wi-Fi Direct</string>
+    <string name="discover_bt">发现蓝牙设备</string>
+    <string name="start_bt_server">开始监听（蓝牙）</string>
+    <string name="disconnect_wifi">断开 Wi-Fi</string>
+    <string name="pick_file">选择要发送的文件</string>
+
+    <!-- 状态 -->
+    <string name="wifi_idle">Wi-Fi Direct：空闲</string>
+    <string name="bt_idle">蓝牙：空闲</string>
+    <string name="bt_enabled_status">蓝牙：已开启</string>
+    <string name="bt_disabled_status">蓝牙：未开启</string>
+    <string name="empty_devices">还没有设备。点击上方「发现」按钮搜索。</string>
+    <string name="send_hint">点击下方任意设备发送已选文件。</string>
+    <string name="selected_file_label">已选：%1$s（%2$s）</string>
+
+    <!-- Toast / 提示 -->
+    <string name="no_file_selected">未选择文件</string>
+    <string name="toast_file_selected">已选择文件，请点击对端设备发送。</string>
+    <string name="toast_received">已收到：%1$s</string>
+    <string name="toast_sending_via_wfd">正在通过 Wi-Fi Direct 发送 %1$s…</string>
+    <string name="pick_file_first">请先选择文件</string>
+    <string name="connecting_to">正在连接 %1$s…</string>
+    <string name="connecting_bt">正在通过蓝牙连接 %1$s…</string>
+    <string name="bt_connect_failed">蓝牙连接失败</string>
+    <string name="no_owner_addr">尚未拿到组主 IP</string>
+    <string name="waiting_peer_ip">等待对端上报 IP…</string>
+    <string name="wifi_p2p_unsupported">此设备不支持 Wi-Fi Direct</string>
+    <string name="bt_unsupported">此设备不支持蓝牙</string>
+    <string name="bt_enabled">蓝牙已开启</string>
+    <string name="bt_still_disabled">蓝牙仍未开启</string>
+    <string name="bt_perm_denied">蓝牙权限被拒绝</string>
+    <string name="bt_listening">正在监听蓝牙传入连接…</string>
+    <string name="cancel_no_handle">无法取消（任务已不在跟踪）</string>
+    <string name="open_failed">无法打开文件</string>
+    <string name="wfd_group_owner">当前为组主 @ %1$s</string>
+    <string name="wfd_client">已作为客户端连接到组主 @ %1$s</string>
+
+    <!-- 通知渠道 -->
+    <string name="notif_channel_name">文件传输</string>
+    <string name="notif_channel_desc">显示正在进行的文件传输</string>
+    <string name="notif_ready">已就绪，可接收文件</string>
+    <string name="notif_transferring">传输中… %1$d%%</string>
+
+    <!-- 适配器 -->
+    <string name="cancel">取消</string>
+    <string name="transport_wfd">Wi-Fi Direct</string>
+    <string name="transport_bt">蓝牙</string>
+    <string name="unnamed_device">（未命名）</string>
+    <string name="status_failed">失败</string>
+    <string name="status_canceled">已取消</string>
+    <string name="status_done">完成</string>
+    <string name="status_completed">已完成</string>
+    <string name="status_transferring">传输中…</string>
+
+    <!-- History -->
+    <string name="history">历史</string>
+    <string name="history_title">传输历史</string>
+    <string name="history_empty">暂无传输记录</string>
+
+    <!-- Plurals -->
+    <plurals name="toast_files_selected">
+        <item quantity="other">已选 %d 个文件，请点击对端设备发送。</item>
+    </plurals>
+    <plurals name="selected_files_label">
+        <item quantity="other">已选 %1$d 个文件（%2$s）：%3$s</item>
+    </plurals>
+    <plurals name="toast_sending_via_wfd_batch">
+        <item quantity="other">正在通过 Wi-Fi Direct 发送 %d 个文件…</item>
+    </plurals>
+</resources>
