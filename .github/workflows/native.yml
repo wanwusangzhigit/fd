@@ -108,6 +108,88 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
+  # iOS / iPadOS SwiftPM — protocol library + tests on Linux runner
+  # ---------------------------------------------------------------------------
+  ios-spm-linux:
+    name: iOS (SwiftPM on Linux)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: ios
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "5.9"
+
+      - name: Build
+        run: swift build
+
+      - name: Run tests
+        run: swift test --parallel
+
+      - name: Smoke-test the CLI
+        run: |
+          mkdir -p /tmp/wfd-cli-test
+          echo hello > /tmp/wfd-cli-test/x.txt
+          swift run wfd-cli hash /tmp/wfd-cli-test/x.txt
+          swift run wfd-cli version
+
+  # ---------------------------------------------------------------------------
+  # iOS / iPadOS app — Xcode build via XcodeGen on macOS runner
+  # ---------------------------------------------------------------------------
+  ios-app-mac:
+    name: iOS App (Xcode on macOS)
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: ios
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_*.app/Contents/Developer
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build app for iOS Simulator
+        run: |
+          set -eo pipefail
+          xcodebuild \
+            -project WFDTransfer.xcodeproj \
+            -scheme WFDTransfer \
+            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -configuration Debug \
+            -derivedDataPath build/DerivedData \
+            build | xcpretty
+
+      - name: Build app for iPad Simulator
+        run: |
+          xcodebuild \
+            -project WFDTransfer.xcodeproj \
+            -scheme WFDTransfer \
+            -destination 'platform=iOS Simulator,name=iPad (10th generation),OS=latest' \
+            -configuration Debug \
+            build | xcpretty
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfdtransfer-ios-build
+          path: |
+            ios/build/DerivedData/**/*.app
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # Android build (Gradle)
   # ---------------------------------------------------------------------------
   android:

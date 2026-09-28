@@ -1,14 +1,16 @@
 # WiFi Direct + Bluetooth File Transfer
 
-一个完整的 Android 应用 + 跨平台桌面客户端，支持以下任意两端互传文件：
+一个完整的 Android 应用 + 跨平台桌面客户端 + iOS/iPadOS 客户端，支持以下任意两端互传文件：
 
 * **Android ↔ Android** — Wi-Fi Direct (P2P) + 蓝牙 RFCOMM 双通道
 * **Desktop ↔ Desktop** — 同一 LAN 内的 TCP（局域网）或蓝牙（RFCOMM）
 * **Desktop ↔ Android** — 桌面端连到 Android 手机上启动的 `FileTransferService`
   的 TCP 监听端口（默认 8988）
+* **iOS/iPadOS ↔ 任意** — iOS 端通过 Network.framework 跑 TCP + Bonjour 发现，
+  与桌面原生 / Android 都能直连
 
-桌面端是原生 C++17 实现，与 Android 共用同一个 FDFT v2 二进制协议，
-外加一个 native-only 的 SHA-256 trailer 帧用于完整性校验（默认开启，
+桌面端是原生 C++17 实现，iOS 端是纯 Swift + SwiftUI，三端共用同一个 FDFT v2
+二进制协议，外加一个 native-only 的 SHA-256 trailer 帧用于完整性校验（默认开启，
 对 Android 端透明 —— Android reader 只读取 `size` 字节，trailer 自动忽略）。
 
 中文界面（在系统为中文时自动切换）、随传输进度更新的通知栏、点击打开已接收文件、
@@ -46,6 +48,11 @@
     - 可选 SHA-256 trailer 帧（KIND=3）端到端校验完整性
     - UDP 广播 LAN 内设备发现（无需手工输入 IP）
     - ncurses 交互式 TUI（Linux）/ Win32 蓝牙 + Winsock
+13. **iOS / iPadOS 客户端** — `ios/` 下纯 Swift + SwiftUI，iPhone + iPad universal：
+    - 通过 Network.framework（NWListener + NWConnection）跑 TCP，与三端互通
+    - 通过 Bonjour (`NetService` + `NetServiceBrowser`) 发现 LAN 上的对端
+    - SHA-256 trailer 自动校验（接收方为 iOS / 桌面时）
+    - 完整测试覆盖：Linux 上跑 SwiftPM 单测，macOS 上跑 Xcode build
 
 ## 协议
 
@@ -188,6 +195,15 @@ ui/
 - **MinGW-w64 交叉编译**：在 Linux 主机上直接产出可在 Windows 上运行的 `.exe`
 - **CPack 打包**：单命令产出 `.deb`（Linux）或 `.zip`（Windows）
 
+### 第四轮迭代新增（iOS / iPadOS 客户端）
+
+- **纯 Swift + SwiftUI** universal app（iPhone + iPad 同一份代码）
+- **Network.framework TCP**：`NWListener` + `NWConnection`，与三端 wire 兼容
+- **Bonjour 设备发现**：`_wfd._tcp.` 服务类型，iOS 14+ 自动申请本地网络权限
+- **SwiftPM 工程**：协议库可在 Linux 上构建 + 单测，无需 Xcode
+- **XcodeGen 配置**：在 macOS 上 `xcodegen generate` 即可生成完整 `.xcodeproj`
+- **GitHub Actions 三平台 matrix**：Linux GCC + Windows MinGW + macOS Xcode + Android Gradle
+
 ## 原生桌面客户端 (`native/`)
 
 ### 目录结构
@@ -259,6 +275,38 @@ cmake --build build/win64 -j --target wfd_transfer
 cmake -S native -B build\msvc -G "Visual Studio 17 2022" -A x64
 cmake --build build\msvc --config Release -j
 ```
+
+## iOS / iPadOS 客户端 (`ios/`)
+
+iOS 端通过 Network.framework 跑 TCP（与桌面 / Android 同一 FDFT v2 协议），
+通过 Bonjour 发布 / 发现 `_wfd._tcp.` 服务。一份代码同时支持 iPhone 与 iPad。
+
+### 在 Linux 上构建 + 测试（协议库部分）
+
+不需要 Xcode —— SwiftPM 协议库可以独立构建：
+
+```bash
+cd ios
+swift build           # 构建 FDFTProtocol + wfd-cli
+swift test            # 跑所有单元测试（Protocol / Hash / FileSink）
+swift run wfd-cli hash /some/file       # 算 SHA-256
+```
+
+需要 Swift 5.9+（GitHub Actions 的 `swift-actions/setup-swift@v2` 自动安装）。
+
+### 在 macOS 上构建 iOS App
+
+需要 Xcode 15+ 和 [XcodeGen](https://github.com/yonaskolb/XcodeGen)：
+
+```bash
+brew install xcodegen
+cd ios && xcodegen generate
+open WFDTransfer.xcodeproj
+# 在 Xcode 中 ⌘R 即可安装到模拟器或真机
+```
+
+`project.yml` 配置成 universal app（`TARGETED_DEVICE_FAMILY: "1,2"`），
+iPhone 与 iPad 自动切换布局（NavigationSplitView / TabView）。
 
 ### CLI 用法
 
