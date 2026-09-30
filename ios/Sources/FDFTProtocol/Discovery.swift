@@ -172,34 +172,50 @@ public final class TCPListener {
     }
 
     private func receiveOne(conn: NWConnection, peerHost: String) async throws {
-        var reader = ConnectionReader(connection: conn)
-        let kind = try readFramePrefix(&reader)
+        // Async versions of the protocol helpers — read frames directly
+        // off the NWConnection rather than through the sync `Reader`
+        // protocol (which would need a semaphore bridge that risks
+        // deadlock when the connection's queue is the same one we're
+        // blocking).
+        let kind = try await readFramePrefixAsync(conn)
         guard kind == FDFT.kindFile else {
             throw ProtocolError.unknownKind(found: kind)
         }
-        let header = try readFilePayload(&reader)
+        let header = try await readFilePayloadAsync(conn)
         let sink = FileSink(receiveDir: receiveDir)
         let stream = SHA256Stream()
         let outcome = try await sink.stream(
-            from: { try await conn.receive(minimum: 1, maximum: 64 * 1024) },
+            from: { [weak conn] -> Data? in
+                guard let conn = conn else { return nil }
+                // NWConnection.receive on a closed connection throws; treat
+                // any error as clean EOF so the sink stops cleanly.
+                let chunk: Data
+                do {
+                    chunk = try await conn.receive(minimum: 1, maximum: 64 * 1024)
+                } catch {
+                    return nil
+                }
+                return chunk.isEmpty ? nil : chunk
+            },
             size: header.size,
             tee: { stream.update($0) })
+
         var receivedHash: String?
         var integrityVerified = false
         // Optional HASH trailer — best-effort.
-        if let peek = try? await conn.receive(minimum: 6, maximum: 6),
-           !peek.isEmpty {
-            let prefix = Array(peek.prefix(6))
-            if prefix == FDFT.magic,
-               peek.count > 5,
-               peek[4] == FDFT.version,
-               peek[5] == FDFT.kindHash {
-                if let rest = try? await conn.receive(minimum: 2, maximum: 2),
-                   rest.count == 2 {
+        let peekOpt: Data? = try? await conn.receive(minimum: 6, maximum: 6)
+        if let peek = peekOpt, peek.count == 6 {
+            let prefix = Array(peek)
+            if Array(prefix.prefix(4)) == FDFT.magic,
+               prefix[4] == FDFT.version,
+               prefix[5] == FDFT.kindHash {
+                let restOpt: Data? = try? await conn.receive(minimum: 2, maximum: 2)
+                if let rest = restOpt, rest.count == 2 {
                     let digestLen = Int(rest[1])
                     if digestLen > 0 && digestLen <= FDFT.maxDigestLen {
-                        if let d = try? await conn.receive(minimum: digestLen,
-                                                            maximum: digestLen) {
+                        let dOpt: Data? = try? await conn.receive(
+                            minimum: digestLen, maximum: digestLen)
+                        if let d = dOpt, d.count == digestLen {
                             let digest = Array(d)
                             let computed = stream.finish()
                             integrityVerified = (digest == computed)
@@ -216,7 +232,8 @@ public final class TCPListener {
             fileName: header.name,
             fileSize: header.size,
             savedPath: outcome.path,
-            errorMessage: integrityVerified ? nil : (receivedHash == nil ? nil : "SHA-256 mismatch"),
+            errorMessage: (receivedHash != nil && !integrityVerified)
+                          ? "SHA-256 mismatch" : nil,
             receivedHash: receivedHash,
             integrityVerified: integrityVerified))
     }
@@ -228,33 +245,51 @@ public final class TCPListener {
 }
 
 #if canImport(Network)
-/// Adapter wrapping an `NWConnection` as a `Reader`.
-public struct ConnectionReader: Reader {
-    public let connection: NWConnection
-    public init(connection: NWConnection) { self.connection = connection }
+// MARK: - Async NWConnection read helpers
+//
+// These mirror the synchronous `readFramePrefix` / `readFilePayload` in
+// Protocol.swift but pull bytes via NWConnection's native async
+// `receive(minimum:maximum:)` so we never need to bridge across queue
+// boundaries with semaphores.
 
-    public mutating func read(into buffer: UnsafeMutableRawPointer,
-                              count: Int) throws -> Int {
-        // Bridge async NWConnection to sync Reader API.
-        let semaphore = DispatchSemaphore(value: 0)
-        var got = 0
-        var err: NWError?
-        connection.receive(minimum: 1, maximum: count) { data, _, _, error in
-            if let e = error { err = e; semaphore.signal(); return }
-            if let d = data {
-                d.copyBytes(to: buffer.assumingMemoryBound(to: UInt8.self),
-                            count: d.count)
-                got = d.count
-            }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        if let e = err {
-            throw NSError(domain: "wfd.recv", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "\(e)"])
-        }
-        return got
+private func receiveExact(_ conn: NWConnection,
+                          _ n: Int) async throws -> Data {
+    var collected = Data(capacity: n)
+    while collected.count < n {
+        let chunk = try await conn.receive(minimum: 1, maximum: n - collected.count)
+        if chunk.isEmpty { throw ProtocolError.eof }
+        collected.append(chunk)
     }
+    return collected
+}
+
+private func readFramePrefixAsync(_ conn: NWConnection) async throws -> UInt8 {
+    let header = try await receiveExact(conn, 6)
+    let bytes = Array(header)
+    if Array(bytes.prefix(4)) != FDFT.magic { throw ProtocolError.invalidMagic }
+    if bytes[4] != FDFT.version {
+        throw ProtocolError.unsupportedVersion(found: bytes[4])
+    }
+    let kind = bytes[5]
+    if kind != FDFT.kindFile && kind != FDFT.kindRegisterIP && kind != FDFT.kindHash {
+        throw ProtocolError.unknownKind(found: kind)
+    }
+    return kind
+}
+
+private func readFilePayloadAsync(_ conn: NWConnection) async throws -> FileHeader {
+    let lenBytes = try await receiveExact(conn, 4)
+    let nameLen = Int(loadU32BE(Array(lenBytes)))
+    if nameLen == 0 || nameLen > FDFT.maxNameLen {
+        throw ProtocolError.nameLengthOutOfRange(found: nameLen)
+    }
+    let nameData = try await receiveExact(conn, nameLen)
+    let sizeBytes = try await receiveExact(conn, 8)
+    let size = Int64(bitPattern: loadU64BE(Array(sizeBytes)))
+    guard let name = String(data: nameData, encoding: .utf8) else {
+        throw ProtocolError.nameLengthOutOfRange(found: nameLen)
+    }
+    return FileHeader(name: name, size: size)
 }
 #endif
 

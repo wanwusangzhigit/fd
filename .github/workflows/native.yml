@@ -47,15 +47,24 @@ jobs:
       - name: Test
         run: ctest --test-dir ../build/native --output-on-failure -E 'discovery' --timeout 30
 
+      - name: List build dir (debug aid)
+        run: ls -la ../build/native/
+
       - name: Package (.deb)
-        run: cpack -G DEB -B ../build/native
+        run: cpack -G DEB
+        working-directory: build/native
+
+      - name: Verify .deb produced
+        run: |
+          ls -la *.deb
+          dpkg -c *.deb | head -20
         working-directory: build/native
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
         with:
           name: wfd_transfer-linux-deb
-          path: build/native/*.deb
+          path: build/native/wfd_transfer-*.deb
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -74,9 +83,14 @@ jobs:
       - name: Install MinGW-w64 toolchain
         run: |
           sudo apt-get update
+          # NB: apt package uses hyphen `x86-64`, not underscore `x86_64`.
+          # Both `g++-mingw-w64-x86-64-posix` (POSIX threads) and the
+          # generic `mingw-w64` meta-package work; we pick the former so
+          # `std::thread` / `std::mutex` use the same runtime as our host
+          # toolchain expectations.
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build \
-            mingw-w64 g++-mingw-w64-x86_64-posix
+            mingw-w64 g++-mingw-w64-x86-64-posix
 
       - name: Configure (cross)
         run: |
@@ -97,14 +111,14 @@ jobs:
           echo "OK: fully static"
 
       - name: Package (.zip)
-        run: cpack -G ZIP -B ../build/win64
+        run: cpack -G ZIP
         working-directory: build/win64
 
       - name: Upload .zip
         uses: actions/upload-artifact@v4
         with:
           name: wfd_transfer-windows-zip
-          path: build/win64/*.zip
+          path: build/win64/wfd_transfer-*.zip
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -151,8 +165,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_*.app/Contents/Developer
+      - name: Show Xcode installation
+        run: |
+          ls -la /Applications/ | grep -i xcode || true
+          xcode-select -p
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen

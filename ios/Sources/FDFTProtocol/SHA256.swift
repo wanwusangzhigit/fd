@@ -1,8 +1,13 @@
 // SHA256.swift — thin SHA-256 wrapper.
 //
 // Uses CryptoKit on Apple platforms and swift-crypto elsewhere. Both
-// APIs are intentionally CryptoKit-shaped, so we expose one type that
-// works as either.
+// libraries share the same shape for our purposes:
+//
+//   SHA256.hash(data: <DataProtocol>) -> SHA256.Digest
+//   SHA256().update(data: <DataProtocol>) -> Void
+//   SHA256().finalize() -> SHA256.Digest
+//
+// We always go through `Data` so both implementations accept the input.
 import Foundation
 #if canImport(CryptoKit)
 import CryptoKit
@@ -14,11 +19,11 @@ public typealias SHA256Digest = Crypto.SHA256
 
 public enum HashUtil {
     public static func sha256(_ data: Data) -> [UInt8] {
-        return Array(SHA256Digest.hash(data))
+        return Array(SHA256Digest.hash(data: data))
     }
 
     public static func sha256(_ bytes: [UInt8]) -> [UInt8] {
-        return Array(SHA256Digest.hash(bytes))
+        return Array(SHA256Digest.hash(data: Data(bytes)))
     }
 
     public static func sha256Hex(_ data: Data) -> String {
@@ -39,7 +44,7 @@ public final class SHA256Stream {
     }
 
     public func update(_ bytes: [UInt8]) {
-        hasher.update(data: bytes.withUnsafeBufferPointer { Data(buffer: $0) })
+        hasher.update(data: Data(bytes))
     }
 
     public func update(_ bytes: UnsafeRawPointer, count: Int) {
@@ -55,3 +60,4 @@ public final class SHA256Stream {
         return finish().map { String(format: "%02x", $0) }.joined()
     }
 }
+

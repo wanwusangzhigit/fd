@@ -264,8 +264,11 @@ public struct ByteBufferReader: Reader {
         if pos >= bytes.count { return 0 }
         let available = bytes.count - pos
         let give = min(available, count)
-        bytes.withUnsafeBufferPointer { src in
-            memcpy(buffer, src.baseAddress! + pos, give)
+        bytes.withUnsafeBufferPointer { src -> Void in
+            // memcpy returns the destination pointer; we don't need it,
+            // but explicitly discard so the closure's return type is Void
+            // (avoids "unused result" warning under -swift-runner strict mode).
+            _ = memcpy(buffer, src.baseAddress! + pos, give)
         }
         pos += give
         return give
