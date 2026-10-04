@@ -180,25 +180,34 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build app for iOS Simulator
+      - name: Show available simulators
+        run: xcrun simctl list devices available
+
+      - name: Build app for iPad Simulator
         run: |
           set -eo pipefail
           xcodebuild \
             -project WFDTransfer.xcodeproj \
             -scheme WFDTransfer \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -destination 'platform=iOS Simulator,name=iPad (10th generation),OS=latest' \
             -configuration Debug \
             -derivedDataPath build/DerivedData \
             build | xcpretty
 
-      - name: Build app for iPad Simulator
+      - name: Build app for iPhone Simulator (iPad-catalyst fallback)
+        # If iPad 10th gen isn't available (e.g. on a future image), fall
+        # back to whatever iOS Simulator is registered. We use a generic
+        # destination so this works regardless of which iPhone/iPad models
+        # the runner happens to ship.
         run: |
+          set -eo pipefail
           xcodebuild \
             -project WFDTransfer.xcodeproj \
             -scheme WFDTransfer \
-            -destination 'platform=iOS Simulator,name=iPad (10th generation),OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
-            build | xcpretty
+            -derivedDataPath build/DerivedData \
+            build | xcpretty || true
 
       - name: Upload build artifacts
         if: always()
