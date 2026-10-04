@@ -185,8 +185,7 @@ public final class TCPListener {
         let sink = FileSink(receiveDir: receiveDir)
         let stream = SHA256Stream()
         let outcome = try await sink.stream(
-            from: { [weak conn] -> Data? in
-                guard let conn = conn else { return nil }
+            from: { () async throws -> Data? in
                 // NWConnection.receive on a closed connection throws; treat
                 // any error as clean EOF so the sink stops cleanly.
                 let chunk: Data

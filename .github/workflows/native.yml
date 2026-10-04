@@ -157,7 +157,10 @@ jobs:
   # ---------------------------------------------------------------------------
   ios-app-mac:
     name: iOS App (Xcode on macOS)
-    runs-on: macos-14
+    # macos-15 ships with Xcode 16 which can open project format 77
+    # (XcodeGen emits the latest format by default). macos-14 (Xcode 15)
+    # only understands format 56 and rejects newer projects.
+    runs-on: macos-15
     defaults:
       run:
         working-directory: ios

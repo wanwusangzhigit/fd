@@ -11,6 +11,10 @@ options:
   deploymentTarget:
     iOS: "15.0"
   createIntermediateGroups: true
+  # Pin Xcode project format to what XcodeGen emits by default. CI runs
+  # on macos-15 (Xcode 16 → objectVersion 77); older Xcode 15 would reject
+  # this format with "future Xcode project format (77)".
+  xcodeVersion: "16.0"
 settings:
   base:
     SWIFT_VERSION: "5.9"
