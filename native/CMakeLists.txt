@@ -70,7 +70,15 @@ target_link_libraries(wfd_core PUBLIC Threads::Threads)
 
 if(WFD_PLATFORM_WINDOWS)
     target_link_libraries(wfd_core PUBLIC ws2_32 bthprops)
-    target_compile_definitions(wfd_core PUBLIC WFD_WIN32=1)
+    # Target Windows Vista+ so inet_ntop / GetTickCount64 / inet_pton are
+    # declared. MinGW defaults to `_WIN32_WINNT=0x0502` (XP) which omits
+    # those APIs from `<ws2tcpip.h>` / `<windows.h>`.
+    target_compile_definitions(wfd_core PUBLIC
+        WFD_WIN32=1
+        _WIN32_WINNT=0x0600
+        WINVER=0x0600
+        _WIN32_IE=0x0600
+    )
     # Statically link the C++ runtime so the produced .exe runs on Windows
     # machines that don't have libgcc_s_seh / libstdc++ installed.
     target_link_options(wfd_core PUBLIC -static-libgcc -static-libstdc++)

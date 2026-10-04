@@ -25,6 +25,24 @@ namespace {
 using BtSocket = SOCKET;
 constexpr BtSocket kBtInvalid = INVALID_SOCKET;
 
+// Convert a UTF-16 wide Bluetooth device name into a UTF-8 `std::string`.
+// Uses WideCharToMultiByte rather than wcstombs_s because the latter has
+// a 5-argument signature under MinGW that's easy to call incorrectly.
+std::string WideToUtf8(const wchar_t* wide) {
+    if (!wide) return {};
+    int len = ::lstrlenW(wide);
+    if (len == 0) return {};
+    std::string out(static_cast<size_t>(len) * 4, '\0');
+    int n = ::WideCharToMultiByte(CP_UTF8, 0, wide, len,
+                                  out.data(), static_cast<int>(out.size()),
+                                  nullptr, nullptr);
+    if (n > 0) {
+        out.resize(static_cast<size_t>(n));
+        return out;
+    }
+    return {};
+}
+
 bool ParseUuid(const std::string& s, GUID* out) {
     // Accept canonical `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
     std::string c;
@@ -142,11 +160,7 @@ std::vector<PeerDevice> EnumeratePairedDevices(size_t max) {
     do {
         PeerDevice p;
         p.address = FormatBdaddr(info.Address.ullLong);
-        // Convert szName from wide chars.
-        char buf[256];
-        size_t n = 0;
-        wcstombs_s(&n, buf, info.szName, sizeof(buf));
-        p.name = buf;
+        p.name = WideToUtf8(info.szName);
         result.push_back(std::move(p));
         if (max && result.size() >= max) break;
     } while (BluetoothFindNextDevice(h, &info));
@@ -177,9 +191,7 @@ int DiscoverDevices(std::function<void(const PeerDevice&)> onFound, int duration
     do {
         PeerDevice p;
         p.address = FormatBdaddr(info.Address.ullLong);
-        char buf[256]; size_t n = 0;
-        wcstombs_s(&n, buf, info.szName, sizeof(buf));
-        p.name = buf;
+        p.name = WideToUtf8(info.szName);
         onFound(p);
         ++count;
     } while (BluetoothFindNextDevice(h, &info));

@@ -95,12 +95,6 @@ int64_t FileSize(const std::string& path) {
 }
 
 std::string Basename(const std::string& path) {
-    const char sep =
-#ifdef WFD_WIN32
-        '\\';
-#else
-        '/';
-#endif
     auto pos = path.find_last_of("\\/");
     if (pos == std::string::npos) return path;
     return path.substr(pos + 1);
