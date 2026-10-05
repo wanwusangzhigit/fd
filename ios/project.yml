@@ -24,16 +24,37 @@ settings:
     ENABLE_BITCODE: NO
     ALWAYS_SEARCH_USER_PATHS: NO
 targets:
+  FDFTProtocol:
+    # Cross-platform Swift protocol layer. Exposed as its own framework
+    # target so the app can `import FDFTProtocol`; on Apple platforms
+    # SHA-256 goes through CryptoKit (system framework), so we have no
+    # external dependencies here. (Linux builds use swift-crypto via
+    # the SwiftPM Package.swift at ios/Package.swift instead.)
+    type: framework
+    platform: iOS
+    sources:
+      - path: Sources/FDFTProtocol
+    settings:
+      base:
+        PRODUCT_NAME: FDFTProtocol
+        PRODUCT_BUNDLE_IDENTIFIER: com.wfd.transfer.FDFTProtocol
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+        BUILD_LIBRARY_FOR_DISTRIBUTION: NO
+        SWIFT_VERSION: "5.9"
+
   WFDTransfer:
     type: application
     platform: iOS
     sources:
-      - path: Sources/FDFTProtocol
       - path: Sources/WFDTransferApp
         excludes:
           # Info.plist is referenced explicitly via `info.path` below —
           # don't let XcodeGen also add it as a regular source file.
           - "Info.plist"
+    dependencies:
+      - target: FDFTProtocol
     info:
       path: Sources/WFDTransferApp/Info.plist
     settings:
