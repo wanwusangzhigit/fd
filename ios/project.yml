@@ -43,6 +43,10 @@ targets:
         SKIP_INSTALL: YES
         BUILD_LIBRARY_FOR_DISTRIBUTION: NO
         SWIFT_VERSION: "5.9"
+        # Modern Xcode (16/26) requires every bundled target to have an
+        # Info.plist — either supplied or auto-generated. The framework
+        # doesn't ship a hand-written one, so let Xcode synthesize it.
+        GENERATE_INFOPLIST_FILE: YES
 
   WFDTransfer:
     type: application
