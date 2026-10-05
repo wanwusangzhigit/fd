@@ -42,5 +42,11 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"  # iPhone (1) + iPad (2)
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
         ENABLE_PREVIEWS: YES
+        # Asset catalog configuration. APPICON_NAME tells actool which
+        # .appiconset inside Assets.xcassets holds the launcher icon —
+        # without this actool emits an empty icon set and certain iOS
+        # Simulator builds fail at the asset-compilation phase.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # We ship our own Info.plist; suppress Xcode 13+ auto-generation.
         GENERATE_INFOPLIST_FILE: NO
