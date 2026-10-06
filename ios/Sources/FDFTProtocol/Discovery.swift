@@ -251,6 +251,30 @@ public final class TCPListener {
 // `receive(minimum:maximum:)` so we never need to bridge across queue
 // boundaries with semaphores.
 
+extension NWConnection {
+    /// Async wrapper around the closure-based
+    /// `receive(minimumIncompleteLength:maximumLength:completion:)`.
+    ///
+    /// Network.framework's completion has multiple by-result parameters
+    /// (Data?, ContentContext?, isComplete, NWError), so Swift can't
+    /// auto-bridge it to `async` — we wrap it with a continuation here.
+    ///
+    /// Throws the NWError on failure. Returns the (possibly empty) Data
+    /// on a clean read; callers treat empty data as EOF.
+    func receive(minimum: Int, maximum: Int) async throws -> Data {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            receive(minimumIncompleteLength: minimum,
+                    maximumLength: maximum) { data, _, _, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: data ?? Data())
+                }
+            }
+        }
+    }
+}
+
 private func receiveExact(_ conn: NWConnection,
                           _ n: Int) async throws -> Data {
     var collected = Data(capacity: n)
