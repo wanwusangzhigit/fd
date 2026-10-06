@@ -8,8 +8,11 @@ import Foundation
 #if canImport(Network)
 import Network
 #endif
+#if canImport(os)
+import os
+#endif
 
-public struct SendResult: Equatable {
+public struct SendResult: Equatable, Sendable {
     public let ok: Bool
     public let error: String?
     public let bytesSent: Int64
@@ -23,7 +26,7 @@ public struct SendResult: Equatable {
     }
 }
 
-public struct ReceivedFile: Equatable {
+public struct ReceivedFile: Equatable, Sendable {
     public let peerHost: String
     public let fileName: String
     public let fileSize: Int64
@@ -75,8 +78,27 @@ public enum TCPTransport {
                                     port: NWEndpoint.Port(integerLiteral: UInt16(port)),
                                     using: .tcp)
             let writer = ConnectionWriter(connection: conn)
-            var didFinish = false
-            let lock = NSLock()
+            // Swift-6-safe one-shot guard. OSAllocatedUnfairLock is a
+            // value-type lock whose withLock is async-safe (no
+            // NSLock.lock()/unlock() from an async context, no captured
+            // mutable `var didFinish` accessed concurrently).
+            let didFinish = OSAllocatedUnfairLock(initialState: false)
+
+            // Resume the continuation exactly once; subsequent calls
+            // are no-ops. The atomic test-and-set inside a single
+            // withLock scope proves to the Swift 6 compiler that the
+            // shared flag is race-free.
+            @Sendable
+            func completeOnce(_ result: SendResult) {
+                let firstCaller = didFinish.withLock { state -> Bool in
+                    if state { return false }   // already claimed
+                    state = true                // claim it now
+                    return true
+                }
+                guard firstCaller else { return }
+                cont.resume(returning: result)
+                conn.cancel()
+            }
 
             conn.stateUpdateHandler = { newState in
                 switch newState {
@@ -88,26 +110,12 @@ public enum TCPTransport {
                                                    name: name,
                                                    includeHashTrailer: includeHashTrailer,
                                                    onProgress: onProgress)
-                        lock.lock()
-                        if !didFinish { didFinish = true; cont.resume(returning: result) }
-                        lock.unlock()
-                        conn.cancel()
+                        completeOnce(result)
                     }
                 case .failed(let err):
-                    lock.lock()
-                    if !didFinish {
-                        didFinish = true
-                        cont.resume(returning: SendResult(ok: false,
-                                                           error: "\(err)"))
-                    }
-                    lock.unlock()
+                    completeOnce(SendResult(ok: false, error: "\(err)"))
                 case .cancelled:
-                    lock.lock()
-                    if !didFinish {
-                        didFinish = true
-                        cont.resume(returning: SendResult(ok: false, error: "cancelled"))
-                    }
-                    lock.unlock()
+                    completeOnce(SendResult(ok: false, error: "cancelled"))
                 default:
                     break
                 }
@@ -165,7 +173,7 @@ public enum TCPTransport {
 
 #if canImport(Network)
 /// Adapter wrapping an `NWConnection` as a `Writer` with sync semantics.
-final class ConnectionWriter: Writer {
+final class ConnectionWriter: Writer, @unchecked Sendable {
     let connection: NWConnection
     init(connection: NWConnection) { self.connection = connection }
 

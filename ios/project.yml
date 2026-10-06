@@ -9,7 +9,7 @@ name: WFDTransfer
 options:
   bundleIdPrefix: com.wfd.transfer
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "17.0"
   createIntermediateGroups: true
   # Pin Xcode project format to what XcodeGen emits by default. CI runs
   # on macos-15 (Xcode 16 → objectVersion 77); older Xcode 15 would reject
@@ -38,7 +38,7 @@ targets:
       base:
         PRODUCT_NAME: FDFTProtocol
         PRODUCT_BUNDLE_IDENTIFIER: com.wfd.transfer.FDFTProtocol
-        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
         BUILD_LIBRARY_FOR_DISTRIBUTION: NO
@@ -65,7 +65,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wfd.transfer.app
         TARGETED_DEVICE_FAMILY: "1,2"  # iPhone (1) + iPad (2)
-        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         ENABLE_PREVIEWS: YES
         # Asset catalog configuration. APPICON_NAME tells actool which
         # .appiconset inside Assets.xcassets holds the launcher icon —

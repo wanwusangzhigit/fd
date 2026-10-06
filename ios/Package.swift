@@ -18,8 +18,8 @@ import PackageDescription
 let package = Package(
     name: "WFDTransfer",
     platforms: [
-        .iOS(.v15),
-        .macOS(.v12),
+        .iOS(.v17),
+        .macOS(.v14),
     ],
     products: [
         .library(name: "FDFTProtocol", targets: ["FDFTProtocol"]),
