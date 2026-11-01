@@ -295,8 +295,8 @@ cmake --build build/win64 -j
 
 产物 | 说明
 ---|---
-`build/win64/wfd_transfer.exe` | CLI 客户端（2.8 MB）
-`build/win64/wfd_gui.exe`      | 原生 Win32 桌面 GUI（2.8 MB）
+`build/win64/wfd_transfer.exe` | CLI 客户端
+`build/win64/wfd_gui.exe`      | 原生 Win32 桌面 GUI
 `build/win64/test_*.exe`       | 7 个测试二进制
 
 两个 `.exe` 都是 **完全静态链接** 的，不依赖 libstdc++ / libgcc / libwinpthread
