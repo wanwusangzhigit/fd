@@ -47,7 +47,11 @@
     - FDFT v2 协议 wire-compatible with Android
     - 可选 SHA-256 trailer 帧（KIND=3）端到端校验完整性
     - UDP 广播 LAN 内设备发现（无需手工输入 IP）
-    - ncurses 交互式 TUI（Linux）/ Win32 蓝牙 + Winsock
+    - ncurses 交互式 TUI（Linux）
+    - 原生 Win32 + Common Controls 桌面 GUI（Windows）：零第三方依赖，
+      单个 `.exe` 拷走即用
+    - 两端 UI 共用同一个 `UiModel` 状态机（关键事件不丢、进度 latest-wins、
+      终态保护、速率/ETA）
 13. **iOS / iPadOS 客户端** — `ios/` 下纯 Swift + SwiftUI，iPhone + iPad universal：
     - 通过 Network.framework（NWListener + NWConnection）跑 TCP，与三端互通
     - 通过 Bonjour (`NetService` + `NetServiceBrowser`) 发现 LAN 上的对端
@@ -153,13 +157,20 @@ ui/
 
 ## 测试
 
-34 个单元测试覆盖：
+34 个 Android 单元测试（`./gradlew testDebugUnitTest`）覆盖：
 
 - `WireProtocolTest` — 帧编解码 round-trip、错误输入拒绝
 - `TransferFormatterTest` — 字节大小格式化、百分比钳制、MIME 猜测
 - `TransferAdapterStateTest` — 事件折叠状态机
 - `StreamExtTest` — 流式拷贝、EOF 检测、协作式取消
 - `SanitizeFilenameTest` — 文件名清洗
+
+桌面端另有 7 个 ctest 用例（`ctest --test-dir build/native`）：`protocol` /
+`util` / `hash` / `filesink` / `integration` / `ui_model` / `discovery`。其中
+`ui_model` 是 GUI 与 TUI 共享的那套决策（重复文件名不串线、终态不被进度改写、
+进度洪水不饿死完成事件、速率/ETA 确定性、`Running` 行不被裁剪、并发 8×1000
+事件下 `revision()` 单调、0 端口回环上的真端到端事件流），不依赖任何窗口系统。
+iOS 侧 `cd ios && swift test` 跑协议 / Hash / FileSink 单测。
 
 ## 与旧版本相比的关键修复
 
@@ -199,10 +210,22 @@ ui/
 
 - **纯 Swift + SwiftUI** universal app（iPhone + iPad 同一份代码）
 - **Network.framework TCP**：`NWListener` + `NWConnection`，与三端 wire 兼容
-- **Bonjour 设备发现**：`_wfd._tcp.` 服务类型，iOS 14+ 自动申请本地网络权限
+- **Bonjour 设备发现**：`_wfd._tcp.` 服务类型，iOS 17+ 自动申请本地网络权限
 - **SwiftPM 工程**：协议库可在 Linux 上构建 + 单测，无需 Xcode
 - **XcodeGen 配置**：在 macOS 上 `xcodegen generate` 即可生成完整 `.xcodeproj`
-- **GitHub Actions 三平台 matrix**：Linux GCC + Windows MinGW + macOS Xcode + Android Gradle
+
+### 第五轮迭代新增（Windows 桌面 GUI + 工程修正）
+
+- **原生 Win32 GUI 客户端** `wfd_gui.exe`：`SysListView32` 传输表（自绘进度条）、
+  peers / log 双窗格、TCP + 蓝牙 RFCOMM 监听开关、蓝牙扫描、取消、接收目录选择
+- **共享状态机 `UiModel`**：GUI 与 Linux TUI 复用同一份排队 / 进度 / 取消 / 速率逻辑，
+  决策全部可单测（`test_ui_model.cpp`，不依赖窗口系统）
+- **真实取消 + 实时接收进度**：transport 层向 `UiModel` 上报字节级进度，取消走
+  `CancelToken` 而非仅标记
+- **官方 Gradle wrapper 重新生成**：`gradlew` 不再是手搓 3 行 shim
+- **CI 按模块拆分**：`native.yml` / `ios.yml` / `android.yml`，各自 `paths` 触发；
+  删掉 `-E discovery`、`|| true` 等静默失败；Windows 产物用 DLL 白名单校验静态链接
+- **README 与代码对齐**：iOS 部署目标 17（`project.yml` / `Package.swift` 实证）
 
 ## 原生桌面客户端 (`native/`)
 
@@ -223,9 +246,16 @@ native/
 │   ├── Discovery.{h,cpp}       # UDP 广播 beacon + 监听
 │   ├── FileSink.{h,cpp}        # 接收文件落盘（共享于两个 transport）
 │   ├── Progress.{h,cpp}        # TTY 进度条（自动检测）
+│   ├── UiModel.{h,cpp}         # 共享 UI 状态机（队列 / 进度 / 取消 / 速率 / peers）
 │   ├── main.cpp                # CLI 入口（send / recv / discover / beacon / hash）
-│   └── tui.cpp                 # ncurses 交互式 TUI（Linux）
-└── tests/                      # 6 个测试：protocol / util / hash / filesink / integration / discovery
+│   ├── tui.cpp                 # ncurses 交互式 TUI（Linux，复用 UiModel）
+│   └── gui/                    # 原生 Win32 GUI（复用 UiModel）
+│       ├── GuiApp.{h,cpp}      # 主窗口、三个 ListView、DPI 缩放、消息循环
+│       ├── Win32Util.{h,cpp}   # UTF-8↔UTF-16、文件多选、文件夹选择
+│       ├── wfd_gui.manifest    # Common Controls v6 + supportedOS
+│       └── wfd_gui.rc          # 把 manifest 编进 .exe（MinGW 路径）
+└── tests/                      # 7 个测试：protocol / util / hash / filesink /
+                                #   integration / ui_model / discovery
 ```
 
 ### 在 Linux 上构建
@@ -238,7 +268,7 @@ sudo apt install build-essential cmake libbluetooth-dev libncursesw5-dev mingw-w
 cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native -j
 
-# 跑测试
+# 跑测试（discovery 用例在收发不了广播的主机上自行 soft-skip，不会让 ctest 变红）
 ctest --test-dir build/native --output-on-failure
 ```
 
@@ -249,7 +279,7 @@ ctest --test-dir build/native --output-on-failure
 | `build/native/wfd_transfer`   | CLI 客户端（必装） |
 | `build/native/wfd_tui`        | ncurses 交互式 TUI |
 | `build/native/libwfd_core.a`  | 静态库，可被外部工程复用 |
-| `build/native/test_*`         | 6 个测试二进制 |
+| `build/native/test_*`         | 7 个测试二进制 |
 
 ### 在 Windows 上构建（推荐：交叉编译）
 
@@ -257,15 +287,42 @@ ctest --test-dir build/native --output-on-failure
 # 一次性安装 MinGW-w64 工具链
 sudo apt install mingw-w64 g++-mingw-w64-x86_64-posix
 
-# 配置 + 构建
+# 配置 + 构建（CLI + GUI + 测试）
 cmake -S native -B build/win64 \
       -DCMAKE_TOOLCHAIN_FILE=native/cmake/mingw-x86_64.cmake
-cmake --build build/win64 -j --target wfd_transfer
+cmake --build build/win64 -j
 ```
 
-产物 `build/win64/wfd_transfer.exe` 是 **完全静态链接** 的（2.7 MB），不依赖任何
-外部 DLL，可以直接拷到任意 Windows 机器运行（Win7+）。蓝牙支持通过 `bthprops.cpl`
-+ Win32 `SOCKADDR_BTH` 实现。
+产物 | 说明
+---|---
+`build/win64/wfd_transfer.exe` | CLI 客户端（2.8 MB）
+`build/win64/wfd_gui.exe`      | 原生 Win32 桌面 GUI（2.8 MB）
+`build/win64/test_*.exe`       | 7 个测试二进制
+
+两个 `.exe` 都是 **完全静态链接** 的，不依赖 libstdc++ / libgcc / libwinpthread
+（CI 用 `objdump -p` 的 DLL 白名单把关），可以直接拷到任意 Windows 机器运行
+（Win7+）。蓝牙支持通过 `bthprops.cpl` + Win32 `SOCKADDR_BTH` 实现；GUI 只用
+系统自带的 `comctl32` / `comdlg32` / `shell32`，所以没有引入任何第三方 DLL。
+
+### Windows 桌面 GUI (`wfd_gui.exe`)
+
+原生 Win32 + Common Controls，与 Linux TUI 共用同一个 `UiModel`：
+
+- 顶部按钮条：`Pick files...`（多选）、`Send selected`、`Cancel`、
+  `Receive folder...`（`SHBrowseForFolder`）、`TCP listen` / `Bluetooth listen`
+  两个开关、`Bluetooth scan`
+- **Transfers** 列表 9 列（Dir / State / File / Peer / Progress / Transferred /
+  Rate / ETA / Detail），Progress 列由 `NM_CUSTOMDRAW` 自绘成色条；进度刷新按
+  TaskId 差分、原地 `LVM_UPDATE`，所以滚动位置和选中项不会被进度洪水重置
+- **Peers** 列表（Name / Address / Kind / Seen）：UDP beacon、REGISTER_IP、蓝牙
+  扫描结果都汇到一处；双击某行 = 以该 peer 为目标弹出文件选择，任务先排成
+  `Queued`，点 `Send selected`（或再双击 Transfers 那行）才真正开传
+- **Log** 列表（Time / Message）：连接失败、校验结果、扫描结束等关键事件
+- 文本只在边界处转换：UTF-8 内部串进控件时转 UTF-16，而 wire 上的 `forcedName`、
+  SHA-256 hex、IPv4 文本、蓝牙 MAC 全程保持原始字节 / ASCII
+- Common Controls v6 通过 manifest 激活（MinGW 走 `wfd_gui.rc`，MSVC 走
+  `GuiApp.cpp` 里的 linker pragma），加上 `InitCommonControlsEx` —— 两者缺一，
+  `SysListView32` 就创建失败
 
 ### 在 Windows 上原生构建（MSVC）
 
@@ -275,6 +332,12 @@ cmake --build build/win64 -j --target wfd_transfer
 cmake -S native -B build\msvc -G "Visual Studio 17 2022" -A x64
 cmake --build build\msvc --config Release -j
 ```
+
+MSVC 路径同样会构建 `wfd_gui.exe`（`wfd_gui.rc` 由 rc.exe 编译，manifest 生效），
+`-static-libgcc` / `-static-libstdc++` 只在非 MSVC 时施加 —— link.exe 不认识这些
+拼写。注意 CMake 的 MSVC 默认运行库是 `/MD`，所以 MSVC 产物**不是**单文件可拷走的：
+要么装 VC++ 运行库，要么自己加 `-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`。
+上面那条“完全静态链接”只对 MinGW 交叉编译产物成立。
 
 ## iOS / iPadOS 客户端 (`ios/`)
 
@@ -362,3 +425,25 @@ iPhone 与 iPad 自动切换布局（NavigationSplitView / TabView）。
 - 发送方在流式写文件正文的同时计算 SHA-256，正文结束追加 trailer
 - 接收方在读完 `size` 字节后用 `MSG_PEEK` 探测 6 字节，若是 HASH 帧则校验
 - Android 端只读 `size` 字节，trailer 自动被忽略 → 完全向后兼容
+
+## CI
+
+`.github/workflows/` 按模块拆成三个 workflow，每个只被自己模块的改动触发
+（`push` / `pull_request` 的 `paths` 里同时列出 workflow 文件本身，改配置也能跑）：
+
+| Workflow | Jobs | 触发路径 |
+|----------|------|----------|
+| `native.yml` — *Native (Linux + Windows)* | `native-linux`（GCC：构建 + 7 个 ctest + CPack `.deb` 并 `dpkg -c` 验证）、`native-windows`（MinGW 交叉：构建全部目标 → 断言 `wfd_transfer.exe` / `wfd_gui.exe` / `test_ui_model.exe` 都在 → DLL 白名单校验 → CPack `.zip` 并检查里面有 `wfd_gui.exe`） | `native/**` |
+| `ios.yml` — *iOS (SwiftPM + Xcode app)* | `ios-spm-linux`（`swift build` + `swift test` + `wfd-cli` 冒烟）、`ios-app-mac`（`xcodegen generate` + 一次 `generic/platform=iOS Simulator` 构建） | `ios/**` |
+| `android.yml` — *Android (Gradle)* | `android`（`./gradlew assembleDebug` + `testDebugUnitTest` + 上传 APK） | `app/**`、根 `*.gradle.kts`、`gradle.properties`、`gradle/**`、`gradlew(.bat)` |
+
+几条硬规矩，改动时别退回去：
+
+- **不静默失败**：没有 `-E <regex>` 排除测试，也没有 `|| true`。discovery 用例在
+  不支持广播的主机上自己 `return 0` 打印 `skipping`，而不是被 CI 排除掉。
+- **静态链接是白名单，不是黑名单**：Windows job 用 `objdump -p` 取出导入表里的
+  每个 `DLL Name`，逐个对照固定白名单（`kernel32` / `user32` / `comctl32` /
+  `ws2_32` / `bthprops.cpl` …）。新增一个未知 DLL 会红，这是故意的。
+- **管道不会吞掉失败**：Actions 默认 `bash -eo pipefail`，所以 `xcodebuild | xcpretty`
+  在 `xcpretty` 没装时会直接失败；`ios.yml` 先 `command -v xcpretty` 探测，缺失就
+  退化成 `cat` 打原始日志。
