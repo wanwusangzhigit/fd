@@ -3,6 +3,9 @@
 #include "FileSink.h"
 #include "Platform.h"
 
+#undef NDEBUG  // CMake's default Release build adds -DNDEBUG, which would
+// compile every assert() in this file into a no-op and make the suite pass
+// vacuously.
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -80,8 +83,11 @@ void TestResolveUniquePathCollision() {
 void TestResolveUniquePathSanitizes() {
     std::string dir = TempDir();
     std::string p = ResolveUniquePath(dir, "a/b:c?*.txt");
-    assert(p.find('/') == std::string::npos || p.find("/") >= dir.size());
-    assert(p.find("\\") == std::string::npos || p.find("\\") >= dir.size());
+    // The result must stay inside the receive dir as a single component:
+    // no traversal, and every forbidden character replaced.
+    assert(p.size() > dir.size() && p.compare(0, dir.size(), dir) == 0);
+    assert(platform::Basename(p) == "a_b_c__.txt");
+    assert(p.find("..") == std::string::npos);
 }
 
 } // namespace

@@ -75,14 +75,19 @@ SendResult SendFile(const std::string& host, int port,
                      const std::string& filePath,
                      std::function<void(int64_t, int64_t)> onProgress) {
     return SendFile(host, port, filePath, platform::Basename(filePath),
-                    std::move(onProgress), true);
+                    std::move(onProgress), true, nullptr);
 }
 
 SendResult SendFile(const std::string& host, int port,
                      const std::string& filePath,
                      const std::string& forcedName,
                      std::function<void(int64_t, int64_t)> onProgress,
-                     bool includeHashTrailer) {
+                     bool includeHashTrailer,
+                     const std::atomic<bool>* cancelToken) {
+    auto canceled = [&] {
+        return cancelToken != nullptr &&
+               cancelToken->load(std::memory_order_relaxed);
+    };
     SendResult res;
     int64_t size = platform::FileSize(filePath);
     if (size < 0) {
@@ -113,6 +118,11 @@ SendResult SendFile(const std::string& host, int port,
     std::vector<char> buf(kBuffer);
     int64_t sent = 0;
     while (sent < size) {
+        if (canceled()) {
+            res.error = "canceled";
+            res.bytesSent = sent;
+            return res;
+        }
         size_t want = static_cast<size_t>(size - sent < static_cast<int64_t>(buf.size())
                                           ? size - sent : buf.size());
         in.read(buf.data(), want);
@@ -154,18 +164,12 @@ SendResult SendFile(const std::string& host, int port,
     return res;
 }
 
-SendResult SendFile(const std::string& host, int port,
-                     const std::string& filePath,
-                     const std::string& forcedName,
-                     std::function<void(int64_t, int64_t)> onProgress) {
-    return SendFile(host, port, filePath, forcedName, std::move(onProgress), true);
-}
-
 // ------- TcpListener ------------------------------------------------------
 
 TcpListener::~TcpListener() { Stop(); }
 
-bool TcpListener::Start(int port, const std::string& receiveDir, ReceivedCallback cb) {
+bool TcpListener::Start(int port, const std::string& receiveDir,
+                       ReceivedCallback cb, RecvUpdateCallback onRecv) {
     if (running_.load()) return true;
     int fd = static_cast<int>(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     if (fd < 0) return false;
@@ -194,8 +198,9 @@ bool TcpListener::Start(int port, const std::string& receiveDir, ReceivedCallbac
     running_ = true;
     stopRequested_ = false;
     thread_ = std::make_unique<ThreadHandle>();
-    thread_->t = std::thread([this, fd, receiveDir, cb = std::move(cb)]() mutable {
-        Run(fd, receiveDir, std::move(cb));
+    thread_->t = std::thread([this, fd, receiveDir, cb = std::move(cb),
+                              onRecv = std::move(onRecv)]() mutable {
+        Run(fd, receiveDir, std::move(cb), std::move(onRecv));
     });
     return true;
 }
@@ -218,7 +223,8 @@ void TcpListener::Stop() {
     running_ = false;
 }
 
-void TcpListener::Run(int listenFd, std::string receiveDir, ReceivedCallback cb) {
+void TcpListener::Run(int listenFd, std::string receiveDir, ReceivedCallback cb,
+                      RecvUpdateCallback onRecv) {
     while (!stopRequested_.load()) {
         sockaddr_in peer{};
         socklen_t len = sizeof(peer);
@@ -227,8 +233,9 @@ void TcpListener::Run(int listenFd, std::string receiveDir, ReceivedCallback cb)
             if (stopRequested_.load()) break;
             continue; // soft error, keep looping
         }
+        const uint64_t connId = nextConnId_++;
         // Detach handler into its own thread so accept loop keeps going.
-        std::thread([cli, peer, receiveDir, cb] {
+        std::thread([cli, peer, receiveDir, connId, cb, onRecv] {
             platform::UniqueSocket cliSock{cli};
             char ipBuf[INET_ADDRSTRLEN] = "?";
             inet_ntop(AF_INET, &peer.sin_addr, ipBuf, sizeof(ipBuf));
@@ -236,6 +243,19 @@ void TcpListener::Run(int listenFd, std::string receiveDir, ReceivedCallback cb)
 
             ReceivedFile rf;
             rf.peerHost = peerHost;
+            rf.connId = connId;
+            auto notify = [&onRecv, &rf](RecvUpdate::Stage stage, int64_t done,
+                                        int64_t total) {
+                if (!onRecv) return;
+                RecvUpdate u;
+                u.stage = stage;
+                u.connId = rf.connId;
+                u.peerHost = rf.peerHost;
+                u.fileName = rf.fileName;
+                u.done = done;
+                u.total = total;
+                onRecv(u);
+            };
             try {
                 // First, read the frame prefix (6 bytes) + FILE payload header.
                 // We buffer those bytes so we can replay them into proto::ReadExact
@@ -252,6 +272,7 @@ void TcpListener::Run(int listenFd, std::string receiveDir, ReceivedCallback cb)
                 auto h = proto::ReadFilePayload(rawRead);
                 rf.fileName = h.name;
                 rf.fileSize = h.size;
+                notify(RecvUpdate::Stage::Started, 0, h.size < 0 ? 0 : h.size);
 
                 // Stream body to disk through FileSink, hashing as we go.
                 hash::Sha256Stream fileHash;
@@ -260,8 +281,11 @@ void TcpListener::Run(int listenFd, std::string receiveDir, ReceivedCallback cb)
                     if (r > 0) fileHash.Update(b, static_cast<size_t>(r));
                     return r;
                 };
-                auto out = sink::StreamToFile(hashedRead, receiveDir,
-                                              h.name, h.size, nullptr);
+                auto out = sink::StreamToFile(
+                    hashedRead, receiveDir, h.name, h.size,
+                    [&](int64_t got, int64_t total) {
+                        notify(RecvUpdate::Stage::Progress, got, total);
+                    });
                 if (!out.ok) {
                     rf.errorMessage = out.error;
                     cb(rf);

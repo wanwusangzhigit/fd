@@ -1,6 +1,9 @@
 // test_util.cpp — tests for Util.h helpers.
 #include "Util.h"
 
+#undef NDEBUG  // CMake's default Release build adds -DNDEBUG, which would
+// compile every assert() in this file into a no-op and make the suite pass
+// vacuously.
 #include <cassert>
 #include <cstdio>
 #include <string>

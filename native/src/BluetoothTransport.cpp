@@ -223,7 +223,12 @@ SendResult SendFile(const std::string& peerAddress,
                     const std::string& filePath,
                     const std::string& forcedName,
                     std::function<void(int64_t, int64_t)> onProgress,
-                    bool includeHashTrailer) {
+                    bool includeHashTrailer,
+                    const std::atomic<bool>* cancelToken) {
+    auto canceled = [&] {
+        return cancelToken != nullptr &&
+               cancelToken->load(std::memory_order_relaxed);
+    };
     SendResult res;
 #if defined(WFD_WIN32) || defined(WFD_HAVE_BLUEZ)
     int64_t size = platform::FileSize(filePath);
@@ -310,6 +315,7 @@ SendResult SendFile(const std::string& peerAddress,
     std::vector<char> buf(kBuffer);
     int64_t sent = 0;
     while (sent < size) {
+        if (canceled()) { res.error = "canceled"; break; }
         size_t want = static_cast<size_t>(size - sent < static_cast<int64_t>(buf.size())
                                           ? size - sent : buf.size());
         in.read(buf.data(), want);
@@ -358,22 +364,17 @@ SendResult SendFile(const std::string& peerAddress,
 
 SendResult SendFile(const std::string& peerAddress,
                     const std::string& filePath,
-                    const std::string& forcedName,
                     std::function<void(int64_t, int64_t)> onProgress) {
-    return SendFile(peerAddress, filePath, forcedName, std::move(onProgress), true);
-}
-
-SendResult SendFile(const std::string& peerAddress,
-                    const std::string& filePath,
-                    std::function<void(int64_t, int64_t)> onProgress) {
-    return SendFile(peerAddress, filePath, platform::Basename(filePath), std::move(onProgress), true);
+    return SendFile(peerAddress, filePath, platform::Basename(filePath),
+                    std::move(onProgress), true, nullptr);
 }
 
 // -------- Listener --------------------------------------------------------
 
 BluetoothListener::~BluetoothListener() { Stop(); }
 
-bool BluetoothListener::Start(const std::string& receiveDir, ReceivedCallback cb) {
+bool BluetoothListener::Start(const std::string& receiveDir, ReceivedCallback cb,
+                              RecvUpdateCallback onRecv) {
 #if defined(WFD_WIN32) || defined(WFD_HAVE_BLUEZ)
     if (running_.load()) return true;
     int fd = static_cast<int>(::socket(
@@ -409,7 +410,8 @@ bool BluetoothListener::Start(const std::string& receiveDir, ReceivedCallback cb
     running_ = true;
     stopRequested_ = false;
     thread_ = std::make_unique<ThreadHandle>();
-    thread_->t = std::thread([this, fd, receiveDir, cb = std::move(cb)]() mutable {
+    thread_->t = std::thread([this, fd, receiveDir, cb = std::move(cb),
+                              onRecv = std::move(onRecv)]() mutable {
         while (!stopRequested_.load()) {
 #ifdef WFD_WIN32
             SOCKADDR_BTH peer{}; int len = sizeof(peer);
@@ -421,7 +423,8 @@ bool BluetoothListener::Start(const std::string& receiveDir, ReceivedCallback cb
                 if (stopRequested_.load()) break;
                 continue;
             }
-            std::thread([cli, peer, receiveDir, cb] {
+            const uint64_t connId = nextConnId_++;
+            std::thread([cli, peer, receiveDir, connId, cb, onRecv] {
                 platform::UniqueSocket cliSock{cli};
                 std::string peerAddr =
 #ifdef WFD_WIN32
@@ -431,6 +434,19 @@ bool BluetoothListener::Start(const std::string& receiveDir, ReceivedCallback cb
 #endif
                 ReceivedFile rf;
                 rf.peerAddress = peerAddr;
+                rf.connId = connId;
+                auto notify = [&onRecv, &rf](RecvUpdate::Stage stage, int64_t done,
+                                            int64_t total) {
+                    if (!onRecv) return;
+                    RecvUpdate u;
+                    u.stage = stage;
+                    u.connId = rf.connId;
+                    u.peerAddress = rf.peerAddress;
+                    u.fileName = rf.fileName;
+                    u.done = done;
+                    u.total = total;
+                    onRecv(u);
+                };
                 auto rawRead = [cli](void* b, size_t n) -> int {
 #ifdef WFD_WIN32
                     return ::recv(cli, static_cast<char*>(b), static_cast<int>(n), 0);
@@ -447,6 +463,7 @@ bool BluetoothListener::Start(const std::string& receiveDir, ReceivedCallback cb
                     auto h = proto::ReadFilePayload(rawRead);
                     rf.fileName = h.name;
                     rf.fileSize = h.size;
+                    notify(RecvUpdate::Stage::Started, 0, h.size < 0 ? 0 : h.size);
 
                     // Stream body via FileSink, hashing as we go.
                     hash::Sha256Stream fileHash;
@@ -455,8 +472,11 @@ bool BluetoothListener::Start(const std::string& receiveDir, ReceivedCallback cb
                         if (r > 0) fileHash.Update(b, static_cast<size_t>(r));
                         return r;
                     };
-                    auto out = sink::StreamToFile(hashedRead, receiveDir,
-                                                  h.name, h.size, nullptr);
+                    auto out = sink::StreamToFile(
+                        hashedRead, receiveDir, h.name, h.size,
+                        [&](int64_t got, int64_t total) {
+                            notify(RecvUpdate::Stage::Progress, got, total);
+                        });
                     if (!out.ok) {
                         rf.errorMessage = out.error;
                         cb(rf); return;

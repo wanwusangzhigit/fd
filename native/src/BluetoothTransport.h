@@ -53,10 +53,25 @@ struct ReceivedFile {
     std::string errorMessage;
     std::string receivedHash;
     bool integrityVerified = false;
+    uint64_t connId = 0;
+};
+
+// Live status of an inbound RFCOMM transfer, so a UI can render receive
+// progress rather than one row that appears only at the end. `connId` is
+// stable for one connection and is echoed in `ReceivedFile::connId`.
+struct RecvUpdate {
+    enum class Stage : uint8_t { Started, Progress };
+    Stage stage = Stage::Started;
+    uint64_t connId = 0;
+    std::string peerAddress;
+    std::string fileName;
+    int64_t done = 0;
+    int64_t total = 0;
 };
 
 // Callback signature for listener / discovery.
 using ReceivedCallback = std::function<void(const ReceivedFile&)>;
+using RecvUpdateCallback = std::function<void(const RecvUpdate&)>;
 
 // -------- Discovery ------------------------------------------------------
 
@@ -70,24 +85,18 @@ int DiscoverDevices(std::function<void(const PeerDevice&)> onFound, int duration
 
 // -------- Send -----------------------------------------------------------
 
-// Streams `filePath` to `peerAddress` over RFCOMM.
-SendResult SendFile(const std::string& peerAddress,
-                    const std::string& filePath,
-                    const std::string& forcedName,
-                    std::function<void(int64_t, int64_t)> onProgress = {});
-
-// Convenience: basename derived from filePath.
+// Streams `filePath` to `peerAddress` over RFCOMM. `cancelToken`, when given,
+// is polled between chunks; the result then carries `error == "canceled"`.
 SendResult SendFile(const std::string& peerAddress,
                     const std::string& filePath,
                     std::function<void(int64_t, int64_t)> onProgress = {});
 
-// Lowest-level variant: lets caller suppress the optional SHA-256 trailer
-// (e.g. when talking to the Android app which doesn't expect it).
 SendResult SendFile(const std::string& peerAddress,
                     const std::string& filePath,
                     const std::string& forcedName,
-                    std::function<void(int64_t, int64_t)> onProgress,
-                    bool includeHashTrailer);
+                    std::function<void(int64_t, int64_t)> onProgress = {},
+                    bool includeHashTrailer = true,
+                    const std::atomic<bool>* cancelToken = nullptr);
 
 // -------- Receive (RFCOMM server) ---------------------------------------
 
@@ -101,7 +110,13 @@ public:
 
     // Starts listening for incoming RFCOMM connections from any peer.
     // Returns false if Bluetooth is unsupported or registration fails.
-    bool Start(const std::string& receiveDir, ReceivedCallback cb);
+    // `onRecv` is optional; when given it reports Started / Progress for each
+    // inbound connection ahead of the terminal `cb`.
+    //
+    // As with tcp::TcpListener, connection handlers are detached: `cb` can fire
+    // shortly after Stop(). Capture a shared_ptr by value, nothing else.
+    bool Start(const std::string& receiveDir, ReceivedCallback cb,
+               RecvUpdateCallback onRecv = {});
     void Stop();
     bool IsRunning() const { return running_.load(); }
 
@@ -109,6 +124,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> stopRequested_{false};
     platform::UniqueSocket listenSock_;
+    uint64_t nextConnId_ = 1;  // accept thread only
     struct ThreadHandle { std::thread t; };
     std::unique_ptr<ThreadHandle> thread_;
 };

@@ -9,8 +9,10 @@
 #   ctest --test-dir build/native --output-on-failure
 #
 # Required system libraries:
-#   Linux:   libbluetooth-dev (BlueZ RFCOMM), libncursesw5-dev
-#   Windows: Win32 built-in (Ws2_32, BthProps), PDCurses (optional)
+#   Linux:   libbluetooth-dev (BlueZ RFCOMM), libncursesw5-dev (for wfd_tui)
+#   Windows: built-in only — Ws2_32, BthProps, Comctl32, Comdlg32, Shell32.
+#            wfd_gui is native Win32 + Common Controls on purpose, so no third
+#            party dependency is added and the build stays fully static.
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -64,6 +66,7 @@ add_library(wfd_core STATIC
     src/FileSink.cpp
     src/Progress.cpp
     src/Util.cpp
+    src/UiModel.cpp
 )
 target_include_directories(wfd_core PUBLIC src)
 target_link_libraries(wfd_core PUBLIC Threads::Threads)
@@ -80,8 +83,12 @@ if(WFD_PLATFORM_WINDOWS)
         _WIN32_IE=0x0600
     )
     # Statically link the C++ runtime so the produced .exe runs on Windows
-    # machines that don't have libgcc_s_seh / libstdc++ installed.
-    target_link_options(wfd_core PUBLIC -static-libgcc -static-libstdc++)
+    # machines that don't have libgcc_s_seh / libstdc++ installed. Guarded on
+    # NOT MSVC because these are GCC/Clang spellings and WFD_PLATFORM_WINDOWS
+    # is also true for an MSVC build, where link.exe rejects unknown flags.
+    if(NOT MSVC)
+        target_link_options(wfd_core PUBLIC -static-libgcc -static-libstdc++)
+    endif()
 else()
     # Linux BlueZ + ncurses 仅作为可链接库
     find_library(BLUEZ_LIB bluetooth)
@@ -100,17 +107,17 @@ endif()
 add_executable(wfd_transfer src/main.cpp)
 target_link_libraries(wfd_transfer PRIVATE wfd_core)
 if(WFD_PLATFORM_WINDOWS)
-    target_link_options(wfd_transfer PRIVATE -static-libgcc -static-libstdc++ -static)
+    if(NOT MSVC)
+        target_link_options(wfd_transfer PRIVATE -static-libgcc -static-libstdc++ -static)
+    endif()
 endif()
 
-# --- Interactive UI executable (ncurses / PDCurses) -----------------------
-
-if(WFD_PLATFORM_LINUX)
-    set(CURSES_LIB ncursesw)
-    set(CURSES_NEED_NCURSES ON)
-elseif(WFD_PLATFORM_WINDOWS)
-    set(CURSES_LIB pdcurses)
-endif()
+# --- Interactive UI executables -------------------------------------------
+#
+# Linux gets an ncurses TUI (wfd_tui below). Windows gets a native Win32 GUI
+# (wfd_gui, further down) instead: it needs no third-party dependency, which is
+# what keeps the static-link check in CI and the single-file-distribution
+# property intact. There is deliberately no PDCurses path.
 # 用 check_include / find_library 自己手工探测以避免 CMake 旧模块的怪癖
 if(WFD_PLATFORM_LINUX)
     find_path(CURSES_INCLUDE_DIR NAMES ncurses.h)
@@ -124,6 +131,29 @@ if(WFD_PLATFORM_LINUX)
     else()
         message(STATUS "ncurses not found; skipping wfd_tui (install libncursesw5-dev)")
     endif()
+endif()
+
+# --- Windows desktop GUI ---------------------------------------------------
+
+if(WFD_PLATFORM_WINDOWS)
+    # CMake compiles src/gui/wfd_gui.rc with windres (MinGW) or rc.exe (MSVC);
+    # the .rc embeds wfd_gui.manifest as RT_MANIFEST, which is what activates
+    # Common Controls v6.
+    enable_language(RC)
+    add_executable(wfd_gui WIN32
+        src/gui/GuiApp.cpp
+        src/gui/Win32Util.cpp
+        src/gui/wfd_gui.rc
+    )
+    target_include_directories(wfd_gui PRIVATE src/gui)
+    target_link_libraries(wfd_gui PRIVATE
+        wfd_core comctl32 comdlg32 shell32 ole32 uuid gdi32 user32)
+    if(NOT MSVC)
+        # Single-file distribution: no libgcc/libstdc++/libwinpthread next to
+        # the exe. Verified in CI by an import-table allowlist, not by grepping.
+        target_link_options(wfd_gui PRIVATE -static-libgcc -static-libstdc++ -static)
+    endif()
+    message(STATUS "Win32 GUI target: wfd_gui")
 endif()
 
 # --- Tests ----------------------------------------------------------------
@@ -150,8 +180,12 @@ add_executable(test_integration tests/test_integration.cpp)
 target_link_libraries(test_integration PRIVATE wfd_core)
 add_test(NAME integration COMMAND test_integration)
 
-# Discovery test binds UDP broadcast; skip via `ctest -E discovery` on hosts
-# where that's not allowed (containers without CAP_NET_RAW, etc.).
+add_executable(test_ui_model tests/test_ui_model.cpp)
+target_link_libraries(test_ui_model PRIVATE wfd_core)
+add_test(NAME ui_model COMMAND test_ui_model)
+
+# Discovery test binds UDP broadcast; it soft-skips (exit 0) on hosts where that
+# is not permitted, e.g. containers without CAP_NET_RAW. No need to exclude it.
 add_executable(test_discovery tests/test_discovery.cpp)
 target_link_libraries(test_discovery PRIVATE wfd_core)
 add_test(NAME discovery COMMAND test_discovery)
@@ -164,6 +198,11 @@ install(TARGETS wfd_transfer wfd_core
     ARCHIVE DESTINATION lib
 )
 
+# Separate command because the target only exists on Windows.
+if(WFD_PLATFORM_WINDOWS)
+    install(TARGETS wfd_gui RUNTIME DESTINATION bin)
+endif()
+
 install(FILES
     src/Protocol.h
     src/Hash.h
@@ -174,6 +213,7 @@ install(FILES
     src/TcpTransport.h
     src/BluetoothTransport.h
     src/Progress.h
+    src/UiModel.h
     DESTINATION include/wfd
 )
 

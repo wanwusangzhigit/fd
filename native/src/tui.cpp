@@ -1,34 +1,35 @@
 // tui.cpp — ncurses interactive front-end for the wfd_transfer CLI.
 //
-// Built only when libncursesw / ncurses is found (Linux; PDCurses port on
-// Windows is possible but not wired up yet). Invoke via:
+// Built only when libncursesw / ncurses is found (Linux). The Windows desktop
+// client is `wfd_gui`; PDCurses is deliberately not wired up. Invoke via:
 //
 //   wfd_tui [--dir <receive-dir>] [--port <tcp-port>]
 //
 // Layout (top-down):
 //   [Peers]      discovered peers, pick one with Enter to send.
-//   [Send Queue] files dragged onto the command line, with progress bars.
-//   [Recv Log]   received-file rows that arrived over TCP during this session.
+//   [Send Queue] files queued this session, with progress bars.
+//   [Recv Log]   files that arrived over TCP during this session.
 //   [Hotkeys]    bottom hint line.
 //
-// The UI is deliberately simple: a single thread drives ncurses via
-// `getch()`; background TCP listeners and sends run on their own threads
-// and post updates onto a mutex-protected event queue that the UI thread
-// drains every 100 ms via `timeout(100)`.
-#include "BluetoothTransport.h"
+// All of the interesting logic — event coalescing, terminal-state protection,
+// rates, ETA, row caps — lives in UiModel and is unit-tested on Linux. What is
+// left here is ncurses plumbing: a single thread drives `getch()`, background
+// listeners and senders post events into the model, and every frame the UI
+// thread pumps the model and paints a value-copy snapshot.
 #include "Discovery.h"
 #include "Platform.h"
-#include "Progress.h"
 #include "TcpTransport.h"
+#include "UiModel.h"
 #include "Util.h"
 
+#include <algorithm>
 #include <atomic>
+#include <array>
 #include <chrono>
-#include <condition_variable>
+#include <cstdio>
 #include <cstring>
-#include <ctime>
-#include <mutex>
-#include <queue>
+#include <fstream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -37,80 +38,143 @@
 
 namespace {
 
-// ---- Event queue: producers (listener / sender threads), consumer (UI) ----
+using wfd::ui::Config;
+using wfd::ui::LogRow;
+using wfd::ui::PeerRow;
+using wfd::ui::RecvRow;
+using wfd::ui::Snapshot;
+using wfd::ui::TaskId;
+using wfd::ui::TaskRow;
+using wfd::ui::TaskState;
+using wfd::ui::Transport;
+using wfd::ui::UiEvent;
+using wfd::ui::IsTerminal;
+using wfd::ui::UiModel;
 
-struct UiEvent {
-    enum class Kind {
-        PeerDiscovered,
-        SendStarted,
-        SendProgress,
-        SendCompleted,
-        SendFailed,
-        RecvOk,
-        RecvFail,
-        Info,
-    } kind = Kind::Info;
+std::atomic<bool> g_quit{false};
 
-    std::string name;
-    std::string peer;
-    int64_t a = 0;     // transferred or size
-    int64_t b = 0;     // total
-    std::string extra; // saved path / error
-};
+// Monotonic clock with an arbitrary zero, so SpeedTracker sees small numbers.
+const std::chrono::steady_clock::time_point g_epoch =
+    std::chrono::steady_clock::now();
 
-std::mutex g_evtMutex;
-std::queue<UiEvent> g_evtQueue;
-
-void PostEvent(UiEvent e) {
-    std::lock_guard<std::mutex> lk(g_evtMutex);
-    g_evtQueue.push(std::move(e));
+int64_t NowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - g_epoch).count();
 }
 
-bool DrainEvent(UiEvent& out) {
-    std::lock_guard<std::mutex> lk(g_evtMutex);
-    if (g_evtQueue.empty()) return false;
-    out = std::move(g_evtQueue.front());
-    g_evtQueue.pop();
-    return true;
+// ---- Background producers -------------------------------------------------
+
+void RunDiscovery(std::shared_ptr<UiModel> model) {
+    using namespace wfd::discovery;
+    Beacon beacon;
+    beacon.Start();
+    UiEvent up;
+    up.kind = UiEvent::Kind::BeaconStarted;
+    model->Post(std::move(up));
+    while (!g_quit.load()) {
+        auto peers = Listen(3);
+        for (auto& p : peers) {
+            UiEvent ev;
+            ev.kind = UiEvent::Kind::PeerSeen;
+            ev.transport = Transport::Tcp;
+            ev.peerKind = wfd::ui::PeerKind::Lan;
+            ev.key = p.ip;
+            ev.name = p.host;
+            ev.atMs = NowMs();
+            model->Post(std::move(ev));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    beacon.Stop();
 }
 
-// ---- Application state ----------------------------------------------------
+void RunTcpListener(std::shared_ptr<UiModel> model, int port,
+                    const std::string& dir) {
+    using namespace wfd::tcp;
+    TcpListener listener;
+    auto started = listener.Start(
+        port, dir,
+        [model](const ReceivedFile& rf) {
+            UiEvent ev;
+            ev.kind = rf.errorMessage.empty() ? UiEvent::Kind::RecvCompleted
+                                              : UiEvent::Kind::RecvFailed;
+            ev.transport = Transport::Tcp;
+            ev.connId = rf.connId;
+            ev.key = rf.peerHost;
+            ev.name = rf.fileName;
+            ev.path = rf.savedPath;
+            ev.detail = rf.errorMessage;
+            ev.sha256 = rf.receivedHash;
+            ev.size = rf.fileSize;
+            ev.integrityVerified = rf.integrityVerified;
+            model->Post(std::move(ev));
+        },
+        [model](const RecvUpdate& u) {
+            if (u.stage == RecvUpdate::Stage::Started) {
+                UiEvent ev;
+                ev.kind = UiEvent::Kind::RecvStarted;
+                ev.transport = Transport::Tcp;
+                ev.connId = u.connId;
+                ev.key = u.peerHost;
+                ev.name = u.fileName;
+                ev.size = u.total;
+                model->Post(std::move(ev));
+            } else {
+                model->PostRecvProgress(Transport::Tcp, u.connId, u.done,
+                                        u.total);
+            }
+        });
+    if (!started) {
+        UiEvent ev;
+        ev.kind = UiEvent::Kind::TcpListenFailed;
+        ev.port = port;
+        ev.detail = "cannot bind port " + std::to_string(port);
+        model->Post(std::move(ev));
+        return;
+    }
+    UiEvent ev;
+    ev.kind = UiEvent::Kind::TcpListenStarted;
+    ev.port = listener.port();
+    model->Post(std::move(ev));
 
-struct PeerRow {
-    std::string host; // hostname
-    std::string ip;
-};
+    while (!g_quit.load()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    listener.Stop();
+}
 
-struct SendRow {
-    std::string name;
-    std::string peer;
-    int64_t total = 0;
-    int64_t done = 0;
-    int pct = 0;
-    enum State { Pending, Sending, Done, Failed } state = Pending;
-    std::string detail;
-};
+// One detached thread per transfer. It captures the model by value only: the
+// listener's per-connection handlers outlive Stop(), so nothing here may hold
+// a reference to UI state.
+void StartSend(std::shared_ptr<UiModel> model, TaskId id, std::string peer,
+               std::string sourcePath, std::string name,
+               std::shared_ptr<std::atomic<bool>> token) {
+    std::thread([model, id, peer = std::move(peer),
+                 sourcePath = std::move(sourcePath), name = std::move(name),
+                 token = std::move(token)] {
+        auto onProgress = [model, id](int64_t done, int64_t total) {
+            model->PostProgress(id, done, total);
+        };
 
-struct RecvRow {
-    std::string peer;
-    std::string name;
-    int64_t size = 0;
-    std::string path;
-    std::string err;
-    bool ok = false;
-};
+        auto res = wfd::tcp::SendFile(peer, wfd::tcp::kDefaultFilePort,
+                                     sourcePath, name, onProgress, true,
+                                     token.get());
+        UiEvent done;
+        done.id = id;
+        done.name = name;
+        if (res.ok) {
+            done.kind = UiEvent::Kind::TaskCompleted;
+            done.size = res.bytesSent;
+            done.sha256 = res.senderHash;
+        } else if (res.error == "canceled") {
+            done.kind = UiEvent::Kind::TaskCanceled;
+        } else {
+            done.kind = UiEvent::Kind::TaskFailed;
+            done.detail = res.error;
+        }
+        model->Post(std::move(done));
+    }).detach();
+}
 
-struct AppState {
-    std::vector<PeerRow> peers;
-    std::vector<SendRow> sends;
-    std::vector<RecvRow> recvs;
-    std::vector<std::string> logs;
-    int selected = 0;
-    int focus = 0; // 0=peers, 1=sends, 2=recvs
-    bool quit = false;
-};
-
-// Pretty-printers ----------------------------------------------------------
+// ---- Drawing --------------------------------------------------------------
 
 void RenderBar(int row, int col, int width, int pct) {
     if (width < 2) return;
@@ -123,234 +187,184 @@ void RenderBar(int row, int col, int width, int pct) {
     addch(']');
 }
 
-const char* StateTag(SendRow::State s) {
+const char* StateTag(TaskState s) {
     switch (s) {
-        case SendRow::Pending: return "WAIT";
-        case SendRow::Sending: return "SEND";
-        case SendRow::Done:    return "OK  ";
-        case SendRow::Failed:  return "FAIL";
+        case TaskState::Queued:    return "WAIT";
+        case TaskState::Running:   return "SEND";
+        case TaskState::Completed: return "OK  ";
+        case TaskState::Failed:    return "FAIL";
+        case TaskState::Canceled:  return "CNCL";
     }
     return "    ";
 }
 
-// Background tasks ---------------------------------------------------------
-
-std::atomic<bool> g_state_quit{false};
-
-void RunDiscovery() {
-    using namespace wfd::discovery;
-    Beacon beacon;
-    beacon.Start();
-    while (!g_state_quit.load()) {
-        // Run a single short listen cycle so we keep picking up new arrivals.
-        auto peers = Listen(3);
-        for (auto& p : peers) {
-            UiEvent e;
-            e.kind = UiEvent::Kind::PeerDiscovered;
-            e.name = p.host;
-            e.peer = p.ip;
-            PostEvent(std::move(e));
-        }
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-    beacon.Stop();
-}
-
-void RunTcpListener(int port, const std::string& dir) {
-    using namespace wfd::tcp;
-    TcpListener listener;
-    listener.Start(port, dir, [](const ReceivedFile& rf) {
-        UiEvent e;
-        if (!rf.errorMessage.empty()) {
-            e.kind = UiEvent::Kind::RecvFail;
-            e.peer = rf.peerHost;
-            e.extra = rf.errorMessage;
-        } else {
-            e.kind = UiEvent::Kind::RecvOk;
-            e.peer = rf.peerHost;
-            e.name = rf.fileName;
-            e.a = rf.fileSize;
-            e.extra = rf.savedPath;
-        }
-        PostEvent(std::move(e));
-    });
-    while (!g_state_quit.load()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    listener.Stop();
-}
-
-void StartSend(SendRow& row) {
-    std::thread([row]() mutable {
-        UiEvent started;
-        started.kind = UiEvent::Kind::SendStarted;
-        started.name = row.name;
-        started.peer = row.peer;
-        PostEvent(started);
-
-        auto onProgress = [row](int64_t done, int64_t total) mutable {
-            UiEvent e;
-            e.kind = UiEvent::Kind::SendProgress;
-            e.name = row.name;
-            e.a = done;
-            e.b = total;
-            PostEvent(std::move(e));
-        };
-
-        std::string path = row.detail; // we stash source path in `detail`
-        auto res = wfd::tcp::SendFile(row.peer, wfd::tcp::kDefaultFilePort,
-                                      path, row.name, onProgress);
-        UiEvent done;
-        done.name = row.name;
-        done.peer = row.peer;
-        if (res.ok) {
-            done.kind = UiEvent::Kind::SendCompleted;
-            done.a = res.bytesSent;
-        } else {
-            done.kind = UiEvent::Kind::SendFailed;
-            done.extra = res.error;
-        }
-        PostEvent(done);
-    }).detach();
-}
-
-// Apply event ---------------------------------------------------------------
-
-void ApplyEvent(AppState& s, const UiEvent& e) {
-    switch (e.kind) {
-    case UiEvent::Kind::PeerDiscovered: {
-        for (auto& p : s.peers) {
-            if (p.ip == e.peer) { p.host = e.name; return; }
-        }
-        s.peers.push_back({e.name, e.peer});
-        break;
-    }
-    case UiEvent::Kind::SendStarted: {
-        for (auto& r : s.sends) {
-            if (r.name == e.name && r.peer == e.peer) r.state = SendRow::Sending;
-        }
-        break;
-    }
-    case UiEvent::Kind::SendProgress: {
-        for (auto& r : s.sends) {
-            if (r.name == e.name && r.state == SendRow::Sending) {
-                r.done = e.a;
-                r.total = e.b > 0 ? e.b : r.total;
-                r.pct = r.total > 0 ? static_cast<int>(r.done * 100 / r.total) : 0;
-            }
-        }
-        break;
-    }
-    case UiEvent::Kind::SendCompleted: {
-        for (auto& r : s.sends) {
-            if (r.name == e.name && r.state == SendRow::Sending) {
-                r.state = SendRow::Done;
-                r.done = r.total;
-                r.pct = 100;
-            }
-        }
-        break;
-    }
-    case UiEvent::Kind::SendFailed: {
-        for (auto& r : s.sends) {
-            if (r.name == e.name && r.state == SendRow::Sending) {
-                r.state = SendRow::Failed;
-                r.detail = e.extra;
-            }
-        }
-        break;
-    }
-    case UiEvent::Kind::RecvOk:
-        s.recvs.push_back({e.peer, e.name, e.a, e.extra, "", true});
-        break;
-    case UiEvent::Kind::RecvFail:
-        s.recvs.push_back({e.peer, "", 0, "", e.extra, false});
-        break;
-    case UiEvent::Kind::Info:
-        s.logs.push_back(e.extra);
-        if (s.logs.size() > 50) s.logs.erase(s.logs.begin());
-        break;
-    }
-}
-
-// Drawing -------------------------------------------------------------------
-
-void DrawHeader(const AppState& s) {
+void DrawHeader(const Snapshot& s) {
     attron(A_REVERSE);
     for (int c = 0; c < COLS; ++c) mvaddch(0, c, ' ');
-    mvprintw(0, 0, " wfd_tui  —  peers:%zu  sends:%zu  recvs:%zu ",
-             s.peers.size(), s.sends.size(), s.recvs.size());
+    const std::string listen = s.tcpListening
+        ? "on :" + std::to_string(s.tcpPort)
+        : std::string("off");
+    mvprintw(0, 0,
+             " wfd_tui  —  peers:%zu  sends:%zu  recvs:%zu  tcp:%s  recv-> %s ",
+             s.peers.size(), s.sends.size(), s.recvs.size(), listen.c_str(),
+             s.receiveDir.c_str());
     attroff(A_REVERSE);
 }
 
-void DrawPeers(const AppState& s, int top, int height) {
-    mvprintw(top, 0, "Peers (TAB to focus, 'r' to refresh, Enter to send):");
-    for (size_t i = 0; i < s.peers.size() && static_cast<int>(i) < height - 1; ++i) {
-        const auto& p = s.peers[i];
-        bool sel = s.focus == 0 && static_cast<int>(i) == s.selected;
-        if (sel) attron(A_REVERSE);
-        mvprintw(top + 1 + static_cast<int>(i), 0, " %-24s  %s",
-                 p.host.c_str(), p.ip.c_str());
-        if (sel) attroff(A_REVERSE);
+// Draws `rows` of `label`, highlighting the selected one when `focused`.
+template <class Row, class Painter>
+void DrawPane(const char* label, int top, int height, const std::vector<Row>& rows,
+              bool focused, int selected, Painter paint) {
+    if (focused) attron(A_BOLD);
+    mvprintw(top, 0, "%s", label);
+    if (focused) attroff(A_BOLD);
+    clrtoeol();
+    const int slots = height - 1;
+    // Keep the selected row in view when the pane overflows.
+    int first = 0;
+    if (focused && selected >= slots) first = selected - slots + 1;
+    for (int i = first; i < static_cast<int>(rows.size()) && i - first < slots; ++i) {
+        const int row = top + 1 + (i - first);
+        if (focused && i == selected) attron(A_REVERSE);
+        paint(row, rows[static_cast<size_t>(i)]);
+        if (focused && i == selected) attroff(A_REVERSE);
         clrtoeol();
     }
 }
 
-void DrawSends(const AppState& s, int top, int height) {
-    mvprintw(top, 0, "Send queue:");
-    for (size_t i = 0; i < s.sends.size() && static_cast<int>(i) < height - 1; ++i) {
-        const auto& r = s.sends[i];
-        int row = top + 1 + static_cast<int>(i);
-        mvprintw(row, 0, " %s ", StateTag(r.state));
-        printw("%-20.20s -> %-15.15s  ", r.name.c_str(), r.peer.c_str());
-        int col = getcurx(stdscr);
-        RenderBar(row, col, 20, r.pct);
-        printw("  %3d%%  %s/%s",
-               r.pct,
-               wfd::util::HumanSize(r.done).c_str(),
-               wfd::util::HumanSize(r.total).c_str());
-        clrtoeol();
+void PaintPeer(int row, const PeerRow& p) {
+    mvprintw(row, 0, " %-24s  %s%s", p.name.empty() ? "?" : p.name.c_str(),
+             p.key.c_str(), p.stale ? "  (stale)" : "");
+}
+
+void PaintSend(int row, const TaskRow& r) {
+    mvprintw(row, 0, " %s ", StateTag(r.state));
+    printw("%-20.20s -> %-15.15s  ", r.name.c_str(), r.peer.c_str());
+    const int col = getcurx(stdscr);
+    RenderBar(row, col, 20, r.pct);
+    printw("  %3d%%  %s/%s", r.pct, wfd::util::HumanSize(r.done).c_str(),
+           wfd::util::HumanSize(r.total).c_str());
+    if (r.state == TaskState::Running && r.bytesPerSec > 0) {
+        printw("  %s/s", wfd::util::HumanSize(r.bytesPerSec).c_str());
+        if (r.etaSec >= 0) printw("  eta %llds", static_cast<long long>(r.etaSec));
+    }
+    if (r.cancelRequested && r.state == TaskState::Running) printw("  canceling…");
+    if (r.state == TaskState::Failed && !r.detail.empty()) {
+        printw("  %s", r.detail.c_str());
     }
 }
 
-void DrawRecvs(const AppState& s, int top, int height) {
-    mvprintw(top, 0, "Received:");
-    int slots = height - 1;
-    int start = static_cast<int>(s.recvs.size()) > slots
-                ? static_cast<int>(s.recvs.size()) - slots : 0;
-    for (int i = 0; i + start < static_cast<int>(s.recvs.size()) && i < slots; ++i) {
-        const auto& r = s.recvs[i + start];
-        int row = top + 1 + i;
-        if (r.ok) {
-            mvprintw(row, 0, " OK   %-18.18s  %-9s  from %s  ->  %s",
-                     r.name.c_str(),
-                     wfd::util::HumanSize(r.size).c_str(),
-                     r.peer.c_str(),
-                     r.path.c_str());
-        } else {
-            mvprintw(row, 0, " FAIL from %s: %s",
-                     r.peer.c_str(), r.err.c_str());
-        }
-        clrtoeol();
+void PaintRecv(int row, const RecvRow& r) {
+    mvprintw(row, 0, " %s %-18.18s  %s  from %s",
+             StateTag(r.state), r.name.c_str(),
+             wfd::util::HumanSize(r.size).c_str(), r.peer.c_str());
+    if (r.state == TaskState::Running) {
+        const int col = getcurx(stdscr);
+        RenderBar(row, col, 14, r.pct);
+        printw("  %3d%%", r.pct);
+        if (r.bytesPerSec > 0) printw("  %s/s", wfd::util::HumanSize(r.bytesPerSec).c_str());
+    } else if (!r.error.empty()) {
+        printw("  ->  %s", r.error.c_str());
+    } else {
+        printw("  ->  %s%s", r.savedPath.c_str(),
+               r.integrityVerified ? "  [sha256 verified]" : "");
     }
+}
+
+void PaintLog(int row, const LogRow& l) {
+    mvprintw(row, 0, " %s", l.text.c_str());
 }
 
 void DrawHotkeys(int row) {
     mvprintw(row, 0,
-             "[TAB] focus  [r] refresh  [s] send-file  [Enter] send-to-selected  [q] quit");
+             "[TAB] focus  [UP/DN] select  [s] queue-file  [Enter] send/retry  "
+             "[x] cancel  [q] quit");
     clrtoeol();
 }
 
-// Input handling ------------------------------------------------------------
+void DrawLogs(const Snapshot& s, int top, int height) {
+    const int slots = std::max(1, height - 1);
+    mvprintw(top, 0, "Log:");
+    clrtoeol();
+    int first = std::max(0, static_cast<int>(s.logs.size()) - slots);
+    for (int i = first; i < static_cast<int>(s.logs.size()) && i - first < slots; ++i) {
+        PaintLog(top + 1 + (i - first), s.logs[static_cast<size_t>(i)]);
+    }
+}
 
 std::string PromptLine(int row, const char* prompt) {
+    // The main loop runs with timeout(100) so the screen keeps updating while
+    // nothing is typed, and getnstr inherits it: any pause longer than 100 ms
+    // mid-path would return a truncated string. Prompts are modal, so make the
+    // read blocking and restore the tick afterwards.
+    timeout(-1);
     echo();
     curs_set(1);
     char buf[1024] = {0};
     mvprintw(row, 0, "%s", prompt);
     clrtoeol();
+    refresh();
     getnstr(buf, static_cast<int>(sizeof(buf) - 1));
     noecho();
     curs_set(0);
+    timeout(100);
     return std::string(buf);
+}
+
+struct Cursor {
+    int focus = 0;                          // 0=peers, 1=sends, 2=recvs
+    std::array<int, 3> sel{};               // one cursor per pane, remembered
+};
+
+// Validates and creates a Queued row. An empty `peer` is rejected by the model,
+// which logs why — the tui used to fall back silently to peers[0] and ship a
+// file to someone the user never picked.
+TaskId MakeTask(const std::shared_ptr<UiModel>& model, const std::string& path,
+                const std::string& peer) {
+    if (!wfd::platform::IsReadableFile(path)) {
+        UiEvent ev;
+        ev.kind = UiEvent::Kind::Info;
+        ev.detail = "cannot read: " + path;
+        model->Post(std::move(ev));
+        return 0;
+    }
+    int64_t size = 0;
+    {
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (in) size = static_cast<int64_t>(in.tellg());
+    }
+    TaskRow seed;
+    seed.name = wfd::platform::Basename(path);
+    seed.sourcePath = path;
+    seed.peer = peer;
+    seed.transport = Transport::Tcp;
+    seed.total = size;
+    return model->EnqueueSend(seed, NowMs());
+}
+
+void Launch(const std::shared_ptr<UiModel>& model, TaskId id,
+            const std::string& peer, const std::string& sourcePath,
+            const std::string& name) {
+    if (id == 0) return;
+    // TaskStarted is posted here, on the UI thread, rather than by the worker:
+    // the row must read Sending before the next key press is handled, or a
+    // second Enter on the same row would start a second thread for one task.
+    UiEvent started;
+    started.kind = UiEvent::Kind::TaskStarted;
+    started.id = id;
+    started.name = name;
+    started.path = sourcePath;
+    started.atMs = NowMs();
+    model->Post(std::move(started));
+    model->Pump(NowMs());
+    StartSend(model, id, peer, sourcePath, name, model->CancelToken(id));
+}
+
+// The peer the send panes should target: the Peers-pane cursor, which stays
+// valid while focus is elsewhere so `s` and Enter agree on one destination.
+std::string SelectedPeer(const Snapshot& s, const Cursor& cur) {
+    if (cur.sel[0] < 0 || cur.sel[0] >= static_cast<int>(s.peers.size())) return {};
+    return s.peers[static_cast<size_t>(cur.sel[0])].key;
 }
 
 } // namespace
@@ -364,6 +378,14 @@ int main(int argc, char** argv) {
         else if (a == "--port" && i + 1 < argc) port = std::atoi(argv[++i]);
     }
 
+    // The tui has always kept every peer it ever saw, so expiry is off.
+    Config cfg;
+    cfg.maxLogRows = 50;
+    cfg.peerStaleMs = 0;
+    cfg.peerTtlMs = 0;
+    auto model = std::make_shared<UiModel>(cfg);
+    model->SetReceiveDir(dir);
+
     wfd::platform::InitNetworking();
     initscr();
     noecho();
@@ -372,95 +394,102 @@ int main(int argc, char** argv) {
     keypad(stdscr, TRUE);
     timeout(100);
 
-    AppState s;
+    std::thread discovery_thread(RunDiscovery, model);
+    std::thread tcp_thread(RunTcpListener, model, port, dir);
 
-    std::thread discovery_thread(RunDiscovery);
-    std::thread tcp_thread(RunTcpListener, port, dir);
+    Cursor cur;
+    Snapshot snap = model->Take();
+    bool quit = false;
+    while (!quit) {
+        model->Pump(NowMs());
+        snap = model->Take();
 
-    while (!s.quit) {
         erase();
-        DrawHeader(s);
-        int peers_h = std::max(4, LINES / 4);
-        int sends_h = std::max(4, LINES / 4);
-        int recvs_h = LINES - peers_h - sends_h - 3 /*separators+hotkeys*/ - 1;
+        DrawHeader(snap);
+        const int peers_h = std::max(4, LINES / 4);
+        const int sends_h = std::max(4, LINES / 4);
+        int recvs_h = LINES - peers_h - sends_h - 4;
         if (recvs_h < 3) recvs_h = 3;
-        DrawPeers(s, 1, peers_h);
-        DrawSends(s, 1 + peers_h, sends_h);
-        DrawRecvs(s, 1 + peers_h + sends_h, recvs_h);
+        const int logs_h = std::max(2, LINES - 1 - (1 + peers_h + sends_h + recvs_h));
+        int& sel = cur.sel[cur.focus];
+        DrawPane("Peers (TAB to focus, Enter to send):", 1, peers_h, snap.peers,
+                 cur.focus == 0, cur.sel[0], PaintPeer);
+        DrawPane("Send queue:", 1 + peers_h, sends_h, snap.sends,
+                 cur.focus == 1, cur.sel[1], PaintSend);
+        DrawPane("Received:", 1 + peers_h + sends_h, recvs_h, snap.recvs,
+                 cur.focus == 2, cur.sel[2], PaintRecv);
+        DrawLogs(snap, 1 + peers_h + sends_h + recvs_h, logs_h);
         DrawHotkeys(LINES - 1);
         refresh();
 
-        int ch = getch();
-        if (ch == ERR) {
-            // drain events
-            UiEvent e;
-            while (DrainEvent(e)) ApplyEvent(s, e);
-            continue;
-        }
-        UiEvent e;
-        while (DrainEvent(e)) ApplyEvent(s, e);
+        const int ch = getch();
+        if (ch == ERR) continue;  // nothing typed; the next frame pumps again
 
+        const int rowCount = cur.focus == 0 ? static_cast<int>(snap.peers.size())
+                           : cur.focus == 1 ? static_cast<int>(snap.sends.size())
+                                            : static_cast<int>(snap.recvs.size());
         switch (ch) {
         case 'q':
-            s.quit = true;
-            g_state_quit.store(true);
+            quit = true;
+            g_quit.store(true);
             break;
         case '\t':
-            s.focus = (s.focus + 1) % 3;
-            s.selected = 0;
-            break;
-        case 'r':
-            // Discovery thread loops continuously so nothing fancy needed.
+            cur.focus = (cur.focus + 1) % 3;
             break;
         case KEY_UP:
-            if (s.selected > 0) --s.selected;
+            if (sel > 0) --sel;
             break;
-        case KEY_DOWN: {
-            int maxSel = 0;
-            if (s.focus == 0) maxSel = static_cast<int>(s.peers.size()) - 1;
-            if (s.selected < maxSel) ++s.selected;
+        case KEY_DOWN:
+            if (sel + 1 < rowCount) ++sel;
+            break;
+        case 'x': {
+            // Only the send pane has something a token can actually stop.
+            if (cur.focus == 1 && sel < static_cast<int>(snap.sends.size())) {
+                const TaskRow& r = snap.sends[static_cast<size_t>(sel)];
+                if (!model->TryCancel(r.id)) {
+                    UiEvent ev;
+                    ev.kind = UiEvent::Kind::Info;
+                    ev.detail = "nothing to cancel: " + r.name;
+                    model->Post(std::move(ev));
+                }
+            }
             break;
         }
         case 's': {
-            std::string path = PromptLine(LINES - 2, "Path of file to send: ");
-            if (!path.empty() && wfd::platform::IsReadableFile(path)) {
-                SendRow r;
-                r.name = wfd::platform::Basename(path);
-                r.detail = path; // stash source path here
-                r.peer = s.peers.empty() ? "" : s.peers[0].ip;
-                s.sends.push_back(std::move(r));
-            } else if (!path.empty()) {
-                s.logs.push_back("cannot read: " + path);
-            }
+            const std::string path = PromptLine(LINES - 2, "Path of file to queue: ");
+            if (path.empty()) break;
+            MakeTask(model, path, SelectedPeer(snap, cur));  // stays WAIT until Enter
             break;
         }
         case '\n':
         case KEY_ENTER: {
-            if (s.focus == 0 && !s.peers.empty() &&
-                s.selected < static_cast<int>(s.peers.size())) {
-                std::string path = PromptLine(LINES - 2, "Path of file to send: ");
-                if (!path.empty() && wfd::platform::IsReadableFile(path)) {
-                    SendRow r;
-                    r.name = wfd::platform::Basename(path);
-                    r.detail = path;
-                    r.peer = s.peers[s.selected].ip;
-                    s.sends.push_back(std::move(r));
-                    StartSend(s.sends.back());
-                }
-            } else if (s.focus == 1 && !s.sends.empty()) {
-                // Restart pending/failed send to selected peer.
-                if (!s.peers.empty()) {
-                    s.sends.back().peer = s.peers[0].ip;
-                    StartSend(s.sends.back());
+            if (cur.focus == 0 && sel < static_cast<int>(snap.peers.size())) {
+                const std::string path =
+                    PromptLine(LINES - 2, "Path of file to send: ");
+                if (path.empty()) break;
+                const std::string peer = snap.peers[static_cast<size_t>(sel)].key;
+                const TaskId id = MakeTask(model, path, peer);
+                Launch(model, id, peer, path, wfd::platform::Basename(path));
+            } else if (cur.focus == 1 && sel < static_cast<int>(snap.sends.size())) {
+                const TaskRow row = snap.sends[static_cast<size_t>(sel)];
+                if (row.state == TaskState::Queued) {
+                    Launch(model, row.id, row.peer, row.sourcePath, row.name);
+                } else if (IsTerminal(row.state)) {
+                    // Retry the row the cursor is actually on, not whichever
+                    // happens to be newest.
+                    const TaskId id = MakeTask(model, row.sourcePath, row.peer);
+                    Launch(model, id, row.peer, row.sourcePath, row.name);
                 }
             }
             break;
         }
         default: break;
         }
+        // Rows can disappear under the cursor (caps, expiry); keep it in range.
+        for (int& v : cur.sel) v = std::max(0, v);
     }
 
-    g_state_quit.store(true);
+    g_quit.store(true);
     endwin();
     discovery_thread.join();
     tcp_thread.join();

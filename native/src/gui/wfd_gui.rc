@@ -1,0 +1,16 @@
+// wfd_gui.rc — resources for the Windows desktop client.
+//
+// Processed by windres on MinGW (CMake compiles this to a COFF object) and by
+// rc.exe on MSVC. Exactly one toolchain must supply the manifest: rc.exe
+// predefines _MSC_VER, windres's cpp does not, so the resource line below is
+// MinGW-only and MSVC instead gets the equivalent through the
+// #pragma comment(linker, "/manifestdependency:...") in GuiApp.cpp (guarded by
+// #ifdef _MSC_VER there). Two RT_MANIFEST / id-1 sources in one image is an
+// error we would rather not discover on a machine we cannot build on.
+#include <windows.h>
+
+#ifndef _MSC_VER
+// Resource 1 is CREATEPROCESS_MANIFEST_RESOURCE_ID for an executable, 24 is
+// RT_MANIFEST. Written as numbers so the file needs no windres-specific macros.
+1 24 "wfd_gui.manifest"
+#endif
