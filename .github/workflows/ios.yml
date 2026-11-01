@@ -1,0 +1,119 @@
+name: iOS (SwiftPM + Xcode app)
+
+# Runs on ios/ changes. This used to live inside native.yml, whose `paths`
+# filter was `native/**` — so iOS commits never triggered it and the build only
+# broke after merge.
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # iOS / iPadOS SwiftPM — protocol library + tests on Linux runner
+  # ---------------------------------------------------------------------------
+  ios-spm-linux:
+    name: iOS (SwiftPM on Linux)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: ios
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "5.9"
+
+      - name: Build
+        run: swift build
+
+      - name: Run tests
+        run: swift test --parallel
+
+      - name: Smoke-test the CLI
+        run: |
+          mkdir -p /tmp/wfd-cli-test
+          echo hello > /tmp/wfd-cli-test/x.txt
+          swift run wfd-cli hash /tmp/wfd-cli-test/x.txt
+          swift run wfd-cli version
+
+  # ---------------------------------------------------------------------------
+  # iOS / iPadOS app — Xcode build via XcodeGen on macOS runner
+  # ---------------------------------------------------------------------------
+  ios-app-mac:
+    name: iOS App (Xcode on macOS)
+    # macos-15 ships with Xcode 16 which can open project format 77
+    # (XcodeGen emits the latest format by default). macos-14 (Xcode 15)
+    # only understands format 56 and rejects newer projects.
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: ios
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode installation
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          ls -d /Applications/Xcode*.app || echo "no /Applications/Xcode*.app"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Show available simulators
+        run: xcrun simctl list devices available
+
+      # One build, generic destination. There used to be two: an
+      # "iPad (10th generation)" build and then a generic one carrying
+      # `|| true`. The specific device name is the part that breaks when the
+      # runner image changes, and `|| true` meant that when it did break, the
+      # job still went green.
+      #
+      # xcpretty is not installed on the runner, and GitHub Actions runs steps
+      # with `-eo pipefail`: piping a successful xcodebuild into a missing
+      # command exits 127 and fails the step. So it is probed, not assumed.
+      - name: Build app for the iOS Simulator
+        run: |
+          set -eo pipefail
+          if command -v xcpretty >/dev/null 2>&1; then
+            formatter() { xcpretty; }
+          else
+            echo "xcpretty not installed; showing the raw xcodebuild log"
+            formatter() { cat; }
+          fi
+          xcodebuild \
+            -project WFDTransfer.xcodeproj \
+            -scheme WFDTransfer \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -derivedDataPath build/DerivedData \
+            build | formatter
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfdtransfer-ios-build
+          path: |
+            ios/build/DerivedData/**/*.app
+          if-no-files-found: ignore

@@ -1,5 +1,9 @@
-name: Build & Test
+name: Native (Linux + Windows)
 
+# Scoped to the native module on purpose. The iOS and Android jobs live in
+# ios.yml / android.yml: with everything in one file and `paths: native/**`,
+# a commit touching only ios/ or app/ never started a workflow, so those jobs
+# went weeks without running (see the five consecutive "Fix iOS build" commits).
 on:
   push:
     branches: [main, master]
@@ -10,6 +14,7 @@ on:
     branches: [main, master]
     paths:
       - 'native/**'
+      - '.github/workflows/native.yml'
   workflow_dispatch:
 
 # Cancel superseded runs on the same ref.
@@ -44,11 +49,12 @@ jobs:
       - name: Build
         run: cmake --build ../build/native -j
 
+      # No `-E discovery` any more. tests/test_discovery.cpp soft-skips (exit 0)
+      # when the broadcast bind is refused or no peer answers, so it costs
+      # nothing on a runner and still catches real regressions on a host with a
+      # network — excluding it was giving up a test for free.
       - name: Test
-        run: ctest --test-dir ../build/native --output-on-failure -E 'discovery' --timeout 30
-
-      - name: List build dir (debug aid)
-        run: ls -la ../build/native/
+        run: ctest --test-dir ../build/native --output-on-failure --timeout 30
 
       - name: Package (.deb)
         run: cpack -G DEB
@@ -98,20 +104,59 @@ jobs:
                 -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-x86_64.cmake \
                 -DCMAKE_BUILD_TYPE=Release
 
+      # Full build, not `--target wfd_transfer`: this is the only place the
+      # Win32 GUI (GuiApp.cpp, Win32Util.cpp, wfd_gui.rc + manifest) and the
+      # Windows side of the unit tests are compiled at all.
       - name: Build
-        run: cmake --build ../build/win64 -j --target wfd_transfer
+        run: cmake --build ../build/win64 -j
 
-      - name: Static-link sanity check (no libstdc++ DLL)
+      - name: Verify every executable was produced
         run: |
-          if x86_64-w64-mingw32-objdump -p ../build/win64/wfd_transfer.exe \
-               | grep -E 'DLL Name: (libstdc|libgcc|libwinpthread)'; then
-            echo "ERROR: dynamic runtime DLLs detected" >&2
-            exit 1
-          fi
-          echo "OK: fully static"
+          test -f ../build/win64/wfd_transfer.exe
+          test -f ../build/win64/wfd_gui.exe
+          test -f ../build/win64/test_ui_model.exe
+          ls -la ../build/win64/*.exe
+
+      # Allowlist rather than the old "no libstdc++" blacklist: a new accidental
+      # dynamic dependency (libwinpthread, some stray MinGW port DLL) would have
+      # slipped past that grep, and single-file copy-out is the whole point of
+      # building static. test_ui_model.exe is not checked — it is built for
+      # compile coverage only and a Linux runner cannot execute it.
+      - name: Static-link check (DLL allowlist)
+        run: |
+          set -eo pipefail
+          allowed=' kernel32.dll user32.dll gdi32.dll comctl32.dll comdlg32.dll shell32.dll ole32.dll rpcrt4.dll uuid.dll ws2_32.dll msvcrt.dll advapi32.dll bcrypt.dll ntdll.dll winmm.dll imm32.dll shcore.dll uxtheme.dll crypt32.dll iphlpapi.dll setupapi.dll dwmapi.dll sechost.dll profapi.dll version.dll bthprops.cpl winspool.drv '
+          status=0
+          for exe in wfd_transfer wfd_gui; do
+            echo "== $exe.exe"
+            imports=$(x86_64-w64-mingw32-objdump -p "../build/win64/$exe.exe" \
+                        | awk 'tolower($1)=="dll" && tolower($2)=="name:" {print tolower($3)}')
+            if [ -z "$imports" ]; then
+              echo "ERROR: no import table read from $exe.exe" >&2
+              status=1
+              continue
+            fi
+            while IFS= read -r dll; do
+              case "$allowed" in
+                *" $dll "*) echo "   ok: $dll" ;;
+                *) echo "   ERROR: unexpected dynamic dependency: $dll" >&2; status=1 ;;
+              esac
+            done <<< "$imports"
+          done
+          exit $status
 
       - name: Package (.zip)
         run: cpack -G ZIP
+        working-directory: build/win64
+
+      # The GUI is only "shipped" if it actually landed in the archive.
+      - name: Verify zip contents
+        run: |
+          set -eo pipefail
+          ls -la *.zip
+          unzip -l *.zip
+          unzip -l *.zip | grep -E 'wfd_gui\.exe$'
+          unzip -l *.zip | grep -E 'wfd_transfer\.exe$'
         working-directory: build/win64
 
       - name: Upload .zip
@@ -119,140 +164,4 @@ jobs:
         with:
           name: wfd_transfer-windows-zip
           path: build/win64/wfd_transfer-*.zip
-          if-no-files-found: error
-
-  # ---------------------------------------------------------------------------
-  # iOS / iPadOS SwiftPM — protocol library + tests on Linux runner
-  # ---------------------------------------------------------------------------
-  ios-spm-linux:
-    name: iOS (SwiftPM on Linux)
-    runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: ios
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Swift
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "5.9"
-
-      - name: Build
-        run: swift build
-
-      - name: Run tests
-        run: swift test --parallel
-
-      - name: Smoke-test the CLI
-        run: |
-          mkdir -p /tmp/wfd-cli-test
-          echo hello > /tmp/wfd-cli-test/x.txt
-          swift run wfd-cli hash /tmp/wfd-cli-test/x.txt
-          swift run wfd-cli version
-
-  # ---------------------------------------------------------------------------
-  # iOS / iPadOS app — Xcode build via XcodeGen on macOS runner
-  # ---------------------------------------------------------------------------
-  ios-app-mac:
-    name: iOS App (Xcode on macOS)
-    # macos-15 ships with Xcode 16 which can open project format 77
-    # (XcodeGen emits the latest format by default). macos-14 (Xcode 15)
-    # only understands format 56 and rejects newer projects.
-    runs-on: macos-15
-    defaults:
-      run:
-        working-directory: ios
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Show Xcode installation
-        run: |
-          ls -la /Applications/ | grep -i xcode || true
-          xcode-select -p
-          xcodebuild -version
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate Xcode project
-        run: xcodegen generate
-
-      - name: Show available simulators
-        run: xcrun simctl list devices available
-
-      - name: Build app for iPad Simulator
-        run: |
-          set -eo pipefail
-          xcodebuild \
-            -project WFDTransfer.xcodeproj \
-            -scheme WFDTransfer \
-            -destination 'platform=iOS Simulator,name=iPad (10th generation),OS=latest' \
-            -configuration Debug \
-            -derivedDataPath build/DerivedData \
-            build | xcpretty
-
-      - name: Build app for iPhone Simulator (iPad-catalyst fallback)
-        # If iPad 10th gen isn't available (e.g. on a future image), fall
-        # back to whatever iOS Simulator is registered. We use a generic
-        # destination so this works regardless of which iPhone/iPad models
-        # the runner happens to ship.
-        run: |
-          set -eo pipefail
-          xcodebuild \
-            -project WFDTransfer.xcodeproj \
-            -scheme WFDTransfer \
-            -destination 'generic/platform=iOS Simulator' \
-            -configuration Debug \
-            -derivedDataPath build/DerivedData \
-            build | xcpretty || true
-
-      - name: Upload build artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wfdtransfer-ios-build
-          path: |
-            ios/build/DerivedData/**/*.app
-          if-no-files-found: ignore
-
-  # ---------------------------------------------------------------------------
-  # Android build (Gradle)
-  # ---------------------------------------------------------------------------
-  android:
-    name: Android (Gradle)
-    runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: app
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Build debug APK
-        run: |
-          cd ..
-          ./gradlew assembleDebug --no-daemon --stacktrace
-
-      - name: Run unit tests
-        run: |
-          cd ..
-          ./gradlew testDebugUnitTest --no-daemon
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
