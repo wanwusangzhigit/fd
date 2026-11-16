@@ -203,11 +203,25 @@ std::vector<Peer> Listen(int durationSec) {
     while (true) {
         int64_t remaining = deadline - platform::NowMs();
         if (remaining <= 0) break;
+        // Clamp the wait to [1, 1000] ms. A zero timeout DISABLES SO_RCVTIMEO
+        // (infinite block) on both POSIX and Winsock, so the final sub-second
+        // slice used to wedge recvfrom forever and the deadline was never
+        // re-checked. On Winsock the value is a DWORD of milliseconds, NOT a
+        // timeval — passing one made tv_sec (1) read as 1 ms and (0) as "no
+        // timeout". Mirror BluetoothTransport.cpp's #ifdef split.
+        int64_t waitMs = std::min<int64_t>(remaining, 1000);
+        if (waitMs < 1) waitMs = 1;
+#ifdef WFD_WIN32
+        DWORD timeout = static_cast<DWORD>(waitMs);
+        ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                     reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
         timeval tv{};
-        tv.tv_sec = static_cast<long>(std::min<int64_t>(remaining, 1000) / 1000);
-        tv.tv_usec = 0;
+        tv.tv_sec = static_cast<long>(waitMs / 1000);
+        tv.tv_usec = static_cast<long>((waitMs % 1000) * 1000);
         ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
                      reinterpret_cast<const char*>(&tv), sizeof(tv));
+#endif
 
         char buf[kMaxPacket];
         sockaddr_in src{};
