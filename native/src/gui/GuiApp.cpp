@@ -3,6 +3,38 @@
 // Nothing here is clever. Every decision with consequences (which event wins,
 // what a terminal row may still be rewritten by, how a rate is sampled, when a
 // row is pruned) is made in UiModel and covered by native/tests/test_ui_model.cpp.
+// Pure looks (font, palette, row colors, progress strip, DPI) live in Theme.cpp.
+//
+// ---------------------------------------------------------------------------
+// Functional parity checklist — every item below must survive any refactor.
+//   [x] WM_COMMAND: BTN_FILES / BTN_SEND / BTN_CANCEL / BTN_DIR / BTN_BTSCAN,
+//       CHK_TCP / CHK_BT (all BN_CLICKED).
+//   [x] WM_NOTIFY: transfers NM_CUSTOMDRAW / LVN_ITEMCHANGED / NM_DBLCLK|ACTIVATE,
+//       peers NM_DBLCLK.
+//   [x] WM_CREATE: SetReceiveDir -> check + ToggleTcp(true) -> StartDiscoveryLoop
+//       -> 250 ms timer -> SyncModel(true). WM_SIZE -> Layout. Min 760x460.
+//   [x] WM_DPICHANGED: re-theme, re-font, re-column, re-layout (new visual only).
+//   [x] PickAndQueue: selected peer + multi-file -> EnqueueSend per path (no
+//       silent fallback when peer is empty).
+//   [x] StartSelected: Queued launches; terminal retries as fresh task; running
+//       is ignored; inbound rows are ignored.
+//   [x] LaunchTask: TaskStarted+Pump on UI thread, CancelToken, detached worker
+//       with onProgress->PostProgress, then Completed/Failed/Canceled + WakeUi.
+//       worker captures ONLY shared_ptr<UiModel> (never HWND / GuiApp*).
+//   [x] CancelSelected: TryCancel + Info; SyncModel(true).
+//   [x] ChooseReceiveDir: PickFolder -> SetReceiveDir -> rebind TCP/BT listeners.
+//   [x] ToggleTcp / ToggleBt: start/stop, full callback field set, listen events.
+//   [x] ScanBluetooth: paired + 12 s inquiry, one at a time, PeerSeen posts.
+//   [x] StartDiscoveryLoop: Beacon owned by worker thread, Listen(3) loop,
+//       PeerSeen(LAN), stops on shutdown_.
+//   [x] RecvStarted / RecvCompleted / RecvFailed / PostRecvProgress paths.
+//   [x] SyncModel: Pump(now) -> Take(); revision short-circuit; selection kept
+//       by key/id; log follows tail; same-row in-place update keeps scroll.
+//   [x] WinMain: --dir/--port, InitNetworking, CoInitializeEx, DPI awareness,
+//       InitCommonControlsEx, Config(maxLogRows=200/stale=8000/ttl=0),
+//       IsDialogMessageW loop.
+//   [x] WM_DESTROY order: KillTimer -> shutdown=true -> tcp_.Stop/bt_.Stop ->
+//       g_mainWnd=null -> PostQuitMessage.
 #include "GuiApp.h"
 
 #include "Platform.h"
@@ -17,6 +49,12 @@
 // sub-item pre-paint stage to let the control draw the cell text and then call
 // back at CDDS_ITEMPOSTPAINT | CDDS_SUBITEM, which is where the strip goes.
 #define CDRF_SUBITEMPASSTHRU 0x00020001
+#endif
+
+#ifndef WM_DPICHANGED
+// MinGW's default _WIN32_WINNT=0x0600 (Vista) omits the Win10 message. The
+// value is stable: 0x02E0. EnablePerMonitorDpi() opts us into it at runtime.
+#define WM_DPICHANGED 0x02E0
 #endif
 
 #include <algorithm>
@@ -63,24 +101,14 @@ constexpr const wchar_t* kTransferHeaders[kTransferCols] = {
     L"Transferred", L"Rate", L"ETA", L"Detail",
 };
 
-// Un-scaled: InsertColumn runs them through S().
+// Un-scaled: InsertColumn runs them through Scale().
 constexpr int kTransferWidths[kTransferCols] = {
     38, 52, 190, 140, 78, 120, 92, 78, 260,
 };
 
-// System-DPI-aware process: coordinates are physical pixels, so the fixed
-// metrics below are scaled by the screen's logical DPI.
-float DpiScale() {
-    static float scale = [] {
-        HDC dc = ::GetDC(nullptr);
-        const int dpi = dc ? ::GetDeviceCaps(dc, LOGPIXELSX) : 96;
-        if (dc) ::ReleaseDC(nullptr, dc);
-        return dpi > 0 ? static_cast<float>(dpi) / 96.0f : 1.0f;
-    }();
-    return scale;
-}
-
-int S(int v) { return static_cast<int>(static_cast<float>(v) * DpiScale() + 0.5f); }
+// Scale against the primary monitor for the few calls made before the window
+// exists (window size, column widths). Window-relative scaling uses GuiApp::S.
+int Scale(int v) { return ScalePx(nullptr, v); }
 
 int64_t TickMs() { return static_cast<int64_t>(::GetTickCount64()); }
 
@@ -132,7 +160,7 @@ void InsertColumn(HWND list, int i, const wchar_t* text, int width) {
     LVCOLUMNW col{};
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
     col.pszText = const_cast<wchar_t*>(text);
-    col.cx = S(width);
+    col.cx = Scale(width);
     col.iSubItem = i;
     ::SendMessageW(list, LVM_INSERTCOLUMNW, i, reinterpret_cast<LPARAM>(&col));
 }
@@ -190,6 +218,18 @@ HWND CreateButton(HWND parent, HINSTANCE inst, HFONT font, const wchar_t* label,
     return b;
 }
 
+// A static group box frames a cluster of list views. Created before its child
+// ListView so the children sit above it in Z order.
+HWND CreateGroup(HWND parent, HINSTANCE inst, HFONT font, const wchar_t* label,
+                 int id) {
+    HWND g = ::CreateWindowExW(
+        0, L"BUTTON", label, WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 0, 0, 0, 0,
+        parent, reinterpret_cast<HMENU>(static_cast<intptr_t>(id)), inst,
+        nullptr);
+    ::SendMessageW(g, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    return g;
+}
+
 HWND CreateList(HWND parent, HINSTANCE inst, HFONT font, int id) {
     HWND list = ::CreateWindowExW(
         WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
@@ -236,7 +276,8 @@ bool GuiApp::Create(HINSTANCE instance, int showCmd,
     wc.lpfnWndProc = &GuiApp::WndProc;
     wc.hInstance = instance_;
     wc.hCursor = ::LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    wc.hIcon = ::LoadIcon(instance_, IDI_APPLICATION);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     wc.lpszClassName = kWndClass;
     if (!::RegisterClassW(&wc) && ::GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         return false;
@@ -247,13 +288,17 @@ bool GuiApp::Create(HINSTANCE instance, int showCmd,
     hwnd_ = ::CreateWindowExW(
         0, kWndClass, L"wfd - file transfer",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, CW_USEDEFAULT,
-        CW_USEDEFAULT, S(1120), S(700), nullptr, nullptr, instance_, this);
+        CW_USEDEFAULT, Scale(1180), Scale(720), nullptr, nullptr, instance_, this);
     if (hwnd_ == nullptr) return false;
 
     ::ShowWindow(hwnd_, showCmd);
     ::UpdateWindow(hwnd_);
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Message handling
+// ---------------------------------------------------------------------------
 
 LRESULT CALLBACK GuiApp::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     GuiApp* self = reinterpret_cast<GuiApp*>(
@@ -269,10 +314,6 @@ LRESULT CALLBACK GuiApp::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (self == nullptr) return DefWindowProcW(hwnd, msg, w, l);
     return self->Handle(msg, w, l);
 }
-
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
 
 LRESULT GuiApp::Handle(UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -296,10 +337,13 @@ LRESULT GuiApp::Handle(UINT msg, WPARAM wParam, LPARAM lParam) {
         Layout(rc);
         return 0;
     }
+    case WM_DPICHANGED:
+        OnDpiChanged(lParam);
+        return 0;
     case WM_GETMINMAXINFO: {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
-        mmi->ptMinTrackSize.x = S(760);
-        mmi->ptMinTrackSize.y = S(460);
+        mmi->ptMinTrackSize.x = S(820);
+        mmi->ptMinTrackSize.y = S(520);
         return 0;
     }
     case kWakeMsg:
@@ -336,8 +380,15 @@ LRESULT GuiApp::Handle(UINT msg, WPARAM wParam, LPARAM lParam) {
             switch (cd->nmcd.dwDrawStage) {
             case CDDS_PREPAINT:
                 return CDRF_NOTIFYITEMDRAW;
-            case CDDS_ITEMPREPAINT:
+            case CDDS_ITEMPREPAINT: {
+                const size_t row = static_cast<size_t>(cd->nmcd.dwItemSpec);
+                if (row < transferMirror_.size()) {
+                    theme_.ApplyRowColors(
+                        cd, StateVisual(transferMirror_[row].state),
+                        static_cast<int>(row));
+                }
                 return CDRF_NOTIFYSUBITEMDRAW;
+            }
             case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
                 return CDRF_SUBITEMPASSTHRU;   // we want the post-paint pass
             case CDDS_ITEMPOSTPAINT | CDDS_SUBITEM:
@@ -387,38 +438,35 @@ LRESULT GuiApp::Handle(UINT msg, WPARAM wParam, LPARAM lParam) {
 // ---------------------------------------------------------------------------
 
 void GuiApp::BuildControls() {
-    NONCLIENTMETRICSW ncm{};
-    ncm.cbSize = sizeof(ncm);
-    if (::SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
-        font_ = ::CreateFontIndirectW(&ncm.lfMessageFont);
-    }
-    if (font_ == nullptr) font_ = static_cast<HFONT>(GetStockObject(SYSTEM_FONT));
+    theme_.Rebuild(hwnd_);
+    HFONT font = theme_.Font();
 
-    barBack_ = ::CreateSolidBrush(RGB(222, 222, 222));
-    barFill_ = ::CreateSolidBrush(::GetSysColor(COLOR_HIGHLIGHT));
-
-    btnFiles_  = CreateButton(hwnd_, instance_, font_, L"&Pick files...", IDC_BTN_FILES);
-    btnSend_   = CreateButton(hwnd_, instance_, font_, L"&Send selected", IDC_BTN_SEND);
-    btnCancel_ = CreateButton(hwnd_, instance_, font_, L"Ca&ncel", IDC_BTN_CANCEL);
-    btnDir_    = CreateButton(hwnd_, instance_, font_, L"Receive &folder...", IDC_BTN_DIR);
-    chkTcp_    = CreateButton(hwnd_, instance_, font_, L"&TCP listen", IDC_CHK_TCP,
+    btnFiles_  = CreateButton(hwnd_, instance_, font, L"&Pick files...", IDC_BTN_FILES);
+    btnSend_   = CreateButton(hwnd_, instance_, font, L"&Send selected", IDC_BTN_SEND);
+    btnCancel_ = CreateButton(hwnd_, instance_, font, L"Ca&ncel", IDC_BTN_CANCEL);
+    btnDir_    = CreateButton(hwnd_, instance_, font, L"Receive &folder...", IDC_BTN_DIR);
+    chkTcp_    = CreateButton(hwnd_, instance_, font, L"&TCP listen", IDC_CHK_TCP,
                               BS_AUTOCHECKBOX);
-    chkBt_     = CreateButton(hwnd_, instance_, font_, L"&Bluetooth listen",
+    chkBt_     = CreateButton(hwnd_, instance_, font, L"&Bluetooth listen",
                               IDC_CHK_BT, BS_AUTOCHECKBOX);
-    btnBtScan_ = CreateButton(hwnd_, instance_, font_, L"Bluetooth &scan", IDC_BTN_BTSCAN);
+    btnBtScan_ = CreateButton(hwnd_, instance_, font, L"Bluetooth &scan", IDC_BTN_BTSCAN);
 
-    peers_ = CreateList(hwnd_, instance_, font_, IDC_LST_PEERS);
+    grpPeers_      = CreateGroup(hwnd_, instance_, font, L"Peers", IDC_GRP_PEERS);
+    grpTransfers_  = CreateGroup(hwnd_, instance_, font, L"Transfers", IDC_GRP_TRANSFERS);
+    grpLog_        = CreateGroup(hwnd_, instance_, font, L"Log", IDC_GRP_LOG);
+
+    peers_ = CreateList(hwnd_, instance_, font, IDC_LST_PEERS);
     InsertColumn(peers_, 0, L"Name", 170);
     InsertColumn(peers_, 1, L"Address", 150);
-    InsertColumn(peers_, 2, L"Kind", 80);
+    InsertColumn(peers_, 2, L"Kind", 90);
     InsertColumn(peers_, 3, L"Seen", 70);
 
-    transfers_ = CreateList(hwnd_, instance_, font_, IDC_LST_TRANSFERS);
-    for (int i = 0; i < COL_TRANSFER_COUNT; ++i) {
+    transfers_ = CreateList(hwnd_, instance_, font, IDC_LST_TRANSFERS);
+    for (int i = 0; i < kTransferCols; ++i) {
         InsertColumn(transfers_, i, kTransferHeaders[i], kTransferWidths[i]);
     }
 
-    log_ = CreateList(hwnd_, instance_, font_, IDC_LST_LOG);
+    log_ = CreateList(hwnd_, instance_, font, IDC_LST_LOG);
     InsertColumn(log_, 0, L"Time", 80);
     InsertColumn(log_, 1, L"Message", 760);
 
@@ -428,7 +476,7 @@ void GuiApp::BuildControls() {
                                 reinterpret_cast<HMENU>(
                                     static_cast<intptr_t>(IDC_STATUS)),
                                 instance_, nullptr);
-    ::SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    ::SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 
     // The window handle is live from here on: hand it to the atomic so worker
     // threads can wake us.
@@ -436,11 +484,16 @@ void GuiApp::BuildControls() {
 }
 
 void GuiApp::Layout(RECT c) {
-    const int m = S(8);
-    const int bh = S(26);
+    const int m = S(10);
+    const int bh = S(30);
+    const int gap = m / 2;
+    const int sh = S(24);     // status bar
+    const int logH = S(150);  // log group height
+    const int top = m + bh + m;
+
+    // Top button row.
     int x = m;
     const int y = m;
-
     struct Item { HWND hwnd; int w; };
     const Item items[] = {
         {btnFiles_, 110}, {btnSend_, 130}, {btnCancel_, 80}, {btnDir_, 150},
@@ -449,22 +502,94 @@ void GuiApp::Layout(RECT c) {
     for (const auto& it : items) {
         const int w = S(it.w);
         ::MoveWindow(it.hwnd, x, y, w, bh, TRUE);
-        x += w + m / 2;
+        x += w + gap;
     }
 
-    const int statusH = S(22);
-    const int logH = S(140);
-    const int top = y + bh + m;
-    const int listH = c.bottom - top - logH - statusH - m * 3;
-    const int peersW = std::max(S(260), static_cast<int>(c.right) * 27 / 100);
+    const int availH = c.bottom - top - logH - gap - sh - m;
+    if (availH > S(60)) {
+        const int peersW = std::max(S(260), static_cast<int>(c.right) * 26 / 100);
+        const int transX = m + peersW + gap;
+        const int transW = c.right - transX - m;
+        const int logY = top + availH + gap;
+        const int logW = c.right - m * 2;
 
-    if (listH > S(60)) {
-        ::MoveWindow(peers_, m, top, peersW, listH, TRUE);
-        ::MoveWindow(transfers_, m + peersW + m / 2, top,
-                     c.right - peersW - m * 2 - m / 2, listH, TRUE);
-        ::MoveWindow(log_, m, top + listH + m / 2, c.right - m * 2, logH, TRUE);
+        ::MoveWindow(grpPeers_, m, top, peersW, availH, TRUE);
+        ::MoveWindow(grpTransfers_, transX, top, transW, availH, TRUE);
+        ::MoveWindow(grpLog_, m, logY, logW, logH, TRUE);
+
+        const int gx = S(12);  // group inner horizontal padding
+        const int gy = S(20);  // group inner top, below the caption
+        const int gb = S(8);   // group inner bottom padding
+        ::MoveWindow(peers_, m + gx, top + gy, peersW - gx * 2, availH - gy - gb, TRUE);
+        ::MoveWindow(transfers_, transX + gx, top + gy, transW - gx * 2,
+                     availH - gy - gb, TRUE);
+        ::MoveWindow(log_, m + gx, logY + gy, logW - gx * 2, logH - gy - gb, TRUE);
+
+        // The log message column fills whatever width is left.
+        RECT lr{};
+        ::GetClientRect(log_, &lr);
+        const int msgColW = std::max(S(200), static_cast<int>(lr.right) - S(90));
+        ::SendMessageW(log_, LVM_SETCOLUMNWIDTH, 1, MAKELPARAM(msgColW, 0));
     }
-    ::MoveWindow(status_, 0, c.bottom - statusH, c.right, statusH, TRUE);
+
+    ::MoveWindow(status_, 0, c.bottom - sh, c.right, sh, TRUE);
+    int parts[3] = { c.right / 3, c.right * 2 / 3, -1 };
+    ::SendMessageW(status_, SB_SETPARTS, 3, reinterpret_cast<LPARAM>(parts));
+}
+
+void GuiApp::OnDpiChanged(LPARAM lParam) {
+    theme_.Rebuild(hwnd_);
+    ApplyFontToChildren();
+    RebuildColumns();
+
+    auto* suggested = reinterpret_cast<RECT*>(lParam);
+    if (suggested != nullptr) {
+        ::SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
+                       suggested->right - suggested->left,
+                       suggested->bottom - suggested->top,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    RECT rc{};
+    ::GetClientRect(hwnd_, &rc);
+    Layout(rc);
+    ::InvalidateRect(hwnd_, nullptr, TRUE);
+}
+
+void GuiApp::ApplyFontToChildren() {
+    const WPARAM f = reinterpret_cast<WPARAM>(theme_.Font());
+    const HWND kids[] = {
+        btnFiles_, btnSend_, btnCancel_, btnDir_, chkTcp_, chkBt_, btnBtScan_,
+        grpPeers_, grpTransfers_, grpLog_, peers_, transfers_, log_, status_,
+    };
+    for (HWND h : kids) {
+        if (h != nullptr) ::SendMessageW(h, WM_SETFONT, f, TRUE);
+    }
+}
+
+void GuiApp::RebuildColumns() {
+    const int peerWidths[] = {170, 150, 90, 70};
+    for (int i = 0; i < 4; ++i) {
+        ::SendMessageW(peers_, LVM_SETCOLUMNWIDTH, i,
+                       MAKELPARAM(Scale(peerWidths[i]), 0));
+    }
+    for (int i = 0; i < kTransferCols; ++i) {
+        ::SendMessageW(transfers_, LVM_SETCOLUMNWIDTH, i,
+                       MAKELPARAM(Scale(kTransferWidths[i]), 0));
+    }
+    ::SendMessageW(log_, LVM_SETCOLUMNWIDTH, 0, MAKELPARAM(Scale(80), 0));
+}
+
+int GuiApp::S(int v) const { return ScalePx(hwnd_, v); }
+
+VisualState GuiApp::StateVisual(ui::TaskState s) {
+    switch (s) {
+        case ui::TaskState::Queued:    return VisualState::Queued;
+        case ui::TaskState::Running:   return VisualState::Running;
+        case ui::TaskState::Completed: return VisualState::Completed;
+        case ui::TaskState::Failed:    return VisualState::Failed;
+        case ui::TaskState::Canceled:  return VisualState::Canceled;
+    }
+    return VisualState::Queued;
 }
 
 // ---------------------------------------------------------------------------
@@ -535,17 +660,17 @@ void GuiApp::BuildTransferMirrors(const ui::Snapshot& s,
         m.cell[COL_PEER] = U8(r.peer);
         m.cell[COL_PROGRESS] =
             r.state == ui::TaskState::Queued ? L"-" : Text(L"%d%%", r.pct);
-        m.cell[COL_SIZE] = Text(L"%s / %s", Human(r.done).c_str(),
+        m.cell[COL_SIZE] = Text(L"%ls / %ls", Human(r.done).c_str(),
                                 Human(r.total).c_str());
         m.cell[COL_RATE] =
             r.state == ui::TaskState::Running && r.bytesPerSec > 0
-                ? Text(L"%s/s", Human(r.bytesPerSec).c_str()) : L"-";
+                ? Text(L"%ls/s", Human(r.bytesPerSec).c_str()) : L"-";
         m.cell[COL_ETA] =
             r.state == ui::TaskState::Running ? EtaText(r.etaSec) : L"-";
         std::wstring detail;
         if (!r.detail.empty()) detail = U8(r.detail);
         else if (r.state == ui::TaskState::Completed && !r.sha256.empty())
-            detail = Text(L"sha256 %s", U8(r.sha256.substr(0, 16)).c_str());
+            detail = Text(L"sha256 %ls", U8(r.sha256.substr(0, 16)).c_str());
         if (r.cancelRequested) detail = L"canceling... " + detail;
         m.cell[COL_DETAIL] = detail;
         out.push_back(std::move(m));
@@ -565,11 +690,11 @@ void GuiApp::BuildTransferMirrors(const ui::Snapshot& s,
         m.cell[COL_NAME] = U8(r.name);
         m.cell[COL_PEER] = U8(r.peer);
         m.cell[COL_PROGRESS] = Text(L"%d%%", r.pct);
-        m.cell[COL_SIZE] = Text(L"%s / %s", Human(r.done).c_str(),
+        m.cell[COL_SIZE] = Text(L"%ls / %ls", Human(r.done).c_str(),
                                 Human(r.size).c_str());
         m.cell[COL_RATE] =
             r.state == ui::TaskState::Running && r.bytesPerSec > 0
-                ? Text(L"%s/s", Human(r.bytesPerSec).c_str()) : L"-";
+                ? Text(L"%ls/s", Human(r.bytesPerSec).c_str()) : L"-";
         m.cell[COL_ETA] =
             r.state == ui::TaskState::Running ? EtaText(r.etaSec) : L"-";
         std::wstring detail;
@@ -676,7 +801,7 @@ void GuiApp::UpdateChrome(const ui::Snapshot& s) {
                    s.btListening ? BST_CHECKED : BST_UNCHECKED, 0);
     RefreshCancelButton();
     const std::wstring title = Text(
-        L"wfd - %d peers, %d transfers, receive -> %s",
+        L"wfd - %d peers, %d transfers, receive -> %ls",
         static_cast<int>(s.peers.size()),
         static_cast<int>(s.sends.size() + s.recvs.size()),
         U8(s.receiveDir).c_str());
@@ -692,39 +817,25 @@ void GuiApp::UpdateStatus(const ui::Snapshot& s) {
 
     // Counts go through int, not %zu: this string is formatted by vsnwprintf,
     // which on the msvcrt/UCRT side does not reliably implement the z modifier.
-    const std::wstring txt = Text(
-        L"TCP listen: %s   Bluetooth listen: %s   beacon: %s   peers: %d   "
-        L"running: %d   receive folder: %s",
-        s.tcpListening ? Text(L"on port %d", s.tcpPort).c_str() : L"off",
+    const std::wstring conn = Text(
+        L"TCP: %ls   BT: %ls   beacon: %ls",
+        s.tcpListening ? Text(L"on %d", s.tcpPort).c_str() : L"off",
         s.btListening ? L"on" : L"off",
-        s.beaconRunning ? L"broadcasting" : L"stopped",
-        static_cast<int>(s.peers.size()), static_cast<int>(running),
-        U8(s.receiveDir).c_str());
-    ::SendMessageW(status_, SB_SETTEXTW, 0,
-                   reinterpret_cast<LPARAM>(txt.c_str()));
+        s.beaconRunning ? L"on" : L"off");
+    const std::wstring counts = Text(
+        L"peers: %d   running: %d",
+        static_cast<int>(s.peers.size()), static_cast<int>(running));
+    const std::wstring dest = Text(L"receive: %ls", U8(s.receiveDir).c_str());
+
+    ::SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(conn.c_str()));
+    ::SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(counts.c_str()));
+    ::SendMessageW(status_, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(dest.c_str()));
 }
 
 void GuiApp::DrawProgressStrip(LPNMLVCUSTOMDRAW cd) {
     const size_t row = static_cast<size_t>(cd->nmcd.dwItemSpec);
     if (row >= transferMirror_.size()) return;
-
-    RECT rc{};
-    rc.left = static_cast<LONG>(cd->iSubItem);
-    rc.top = LVIR_BOUNDS;
-    if (!::SendMessageW(transfers_, LVM_GETSUBITEMRECT, cd->nmcd.dwItemSpec,
-                        reinterpret_cast<LPARAM>(&rc))) {
-        return;
-    }
-    if (rc.right <= rc.left || rc.bottom <= rc.top) return;
-
-    rc.top = rc.bottom - S(kBarHeight);
-    ::FillRect(cd->nmcd.hdc, &rc, barBack_);
-    const int w = (rc.right - rc.left) * transferMirror_[row].pct / 100;
-    if (w > 0) {
-        RECT fill = rc;
-        fill.right = fill.left + w;
-        ::FillRect(cd->nmcd.hdc, &fill, barFill_);
-    }
+    theme_.DrawProgress(cd, transferMirror_[row].pct, hwnd_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,7 +1244,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCmd) {
 
     wfd::platform::InitNetworking();  // refcounted; the only call site here
     ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    ::SetProcessDPIAware();
+    wfd::gui::EnablePerMonitorDpi();
 
     // The manifest selects comctl32 v6; this registers the window classes.
     // Without it, CreateWindowExW("SysListView32") fails with

@@ -2,10 +2,11 @@
 //
 // Everything with behavior — event coalescing, terminal-state protection,
 // rates, ETA, row caps, peer identity — lives in UiModel and is unit-tested on
-// Linux (`native/tests/test_ui_model.cpp`). What is left here is window
-// creation, UTF-8→UTF-16 for display, and copy. That trade is deliberate:
-// wfd_gui.exe builds under MinGW but cannot be exercised in CI, so nothing
-// worth trusting should live in this layer.
+// Linux (`native/tests/test_ui_model.cpp`). Pure looks (font, palette, row
+// colors, progress strip, DPI) live in Theme. What is left here is window
+// creation, message routing, UTF-8→UTF-16 for display, and driving the model.
+// That trade is deliberate: wfd_gui.exe builds under MinGW but cannot be
+// exercised in CI, so nothing worth trusting should live in this layer.
 //
 // Threading contract:
 //   * transport callbacks fire on detached connection threads that can outlive
@@ -32,6 +33,7 @@
 #include "BluetoothTransport.h"
 #include "Discovery.h"
 #include "TcpTransport.h"
+#include "Theme.h"
 #include "UiModel.h"
 
 namespace wfd {
@@ -88,9 +90,11 @@ private:
         IDC_LST_TRANSFERS,
         IDC_LST_LOG,
         IDC_STATUS,
+        IDC_GRP_PEERS = 1101,
+        IDC_GRP_TRANSFERS,
+        IDC_GRP_LOG,
     };
     enum : UINT_PTR { IDT_REFRESH = 1 };
-    static constexpr int kBarHeight = 4;  // progress strip thickness
 
     // What the transfers list needs to know about a row beyond its state:
     // which model task it is, everything required to (re)launch or cancel it
@@ -113,6 +117,11 @@ private:
 
     void BuildControls();
     void Layout(RECT client);
+    void OnDpiChanged(LPARAM lParam);
+    void ApplyFontToChildren();
+    void RebuildColumns();
+    int  S(int v) const;  // DPI-scaled against this window's monitor
+
     void SyncModel(bool force);
     void FillPeers(const ui::Snapshot&);
     void FillTransfers(const ui::Snapshot&);
@@ -124,7 +133,6 @@ private:
     void RefreshCancelButton();
     void UpdateStatus(const ui::Snapshot&);
     void DrawProgressStrip(LPNMLVCUSTOMDRAW cd);
-    void StartDiscoveryLoop();
 
     void PickAndQueue();
     void StartSelected();
@@ -134,17 +142,24 @@ private:
     void ToggleBt(bool enable);
     void ScanBluetooth();
     void LaunchTask(const ui::TaskRow& row);
+    void StartDiscoveryLoop();
 
     int SelectedPeerIndex() const;
     int SelectedTransferIndex() const;
 
+    static VisualState StateVisual(ui::TaskState s);
+
     std::shared_ptr<ui::UiModel> model_;
+    Theme theme_;
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
     HWND peers_ = nullptr;
     HWND transfers_ = nullptr;
     HWND log_ = nullptr;
     HWND status_ = nullptr;
+    HWND grpPeers_ = nullptr;
+    HWND grpTransfers_ = nullptr;
+    HWND grpLog_ = nullptr;
     HWND btnFiles_ = nullptr;
     HWND btnSend_ = nullptr;
     HWND btnCancel_ = nullptr;
@@ -152,9 +167,6 @@ private:
     HWND chkTcp_ = nullptr;
     HWND chkBt_ = nullptr;
     HWND btnBtScan_ = nullptr;
-    HFONT font_ = nullptr;
-    HBRUSH barBack_ = nullptr;
-    HBRUSH barFill_ = nullptr;
 
     std::string receiveDir_;
     int tcpPort_ = 0;
