@@ -37,6 +37,7 @@
 //       g_mainWnd=null -> PostQuitMessage.
 #include "GuiApp.h"
 
+#include "I18n.h"
 #include "Platform.h"
 #include "UiModel.h"
 #include "Util.h"
@@ -96,9 +97,11 @@ constexpr const wchar_t* kWndClass = L"wfd_gui.main";
 // shared with the mirror that stores the rendered text.
 constexpr int kTransferCols = static_cast<int>(GuiApp::COL_TRANSFER_COUNT);
 
-constexpr const wchar_t* kTransferHeaders[kTransferCols] = {
-    L"Dir", L"State", L"File", L"Peer", L"Progress",
-    L"Transferred", L"Rate", L"ETA", L"Detail",
+// Column header keys, in the same order as TransferColumn. Resolved through
+// I18n at runtime so a language switch re-labels them via ApplyLanguage.
+constexpr Str kTransferHeaders[kTransferCols] = {
+    Str::ColDir, Str::ColState, Str::ColFile, Str::ColPeer, Str::ColProgress,
+    Str::ColTransferred, Str::ColRate, Str::ColEta, Str::ColDetail,
 };
 
 // Un-scaled: InsertColumn runs them through Scale().
@@ -131,20 +134,20 @@ std::wstring Human(int64_t bytes) {
 
 const wchar_t* StateText(ui::TaskState s) {
     switch (s) {
-        case ui::TaskState::Queued:    return L"WAIT";
-        case ui::TaskState::Running:   return L"RUN";
-        case ui::TaskState::Completed: return L"OK";
-        case ui::TaskState::Failed:    return L"FAIL";
-        case ui::TaskState::Canceled:  return L"CNCL";
+        case ui::TaskState::Queued:    return I18n::Instance().CStr(Str::StateWait);
+        case ui::TaskState::Running:   return I18n::Instance().CStr(Str::StateRun);
+        case ui::TaskState::Completed: return I18n::Instance().CStr(Str::StateOk);
+        case ui::TaskState::Failed:    return I18n::Instance().CStr(Str::StateFail);
+        case ui::TaskState::Canceled:  return I18n::Instance().CStr(Str::StateCancel);
     }
     return L"";
 }
 
 const wchar_t* PeerKindText(ui::PeerKind k) {
     switch (k) {
-        case ui::PeerKind::Lan: return L"LAN";
-        case ui::PeerKind::BluetoothPaired: return L"BT paired";
-        case ui::PeerKind::BluetoothInquiry: return L"BT found";
+        case ui::PeerKind::Lan: return I18n::Instance().CStr(Str::PeerLan);
+        case ui::PeerKind::BluetoothPaired: return I18n::Instance().CStr(Str::PeerBtPaired);
+        case ui::PeerKind::BluetoothInquiry: return I18n::Instance().CStr(Str::PeerBtFound);
     }
     return L"";
 }
@@ -156,13 +159,23 @@ std::wstring EtaText(int64_t etaSec) {
                 static_cast<long long>(etaSec % 60));
 }
 
-void InsertColumn(HWND list, int i, const wchar_t* text, int width) {
+void InsertColumn(HWND list, int i, Str text, int width) {
     LVCOLUMNW col{};
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    col.pszText = const_cast<wchar_t*>(text);
+    std::wstring label = I18n::Instance().Get(text);
+    col.pszText = const_cast<wchar_t*>(label.c_str());
     col.cx = Scale(width);
     col.iSubItem = i;
     ::SendMessageW(list, LVM_INSERTCOLUMNW, i, reinterpret_cast<LPARAM>(&col));
+}
+
+// Re-label an existing column (used by ApplyLanguage on a language switch).
+void SetColumnText(HWND list, int i, Str text) {
+    LVCOLUMNW col{};
+    col.mask = LVCF_TEXT;
+    std::wstring label = I18n::Instance().Get(text);
+    col.pszText = const_cast<wchar_t*>(label.c_str());
+    ::SendMessageW(list, LVM_SETCOLUMNW, i, reinterpret_cast<LPARAM>(&col));
 }
 
 int InsertRow(HWND list, int row, const std::wstring& first) {
@@ -286,7 +299,7 @@ bool GuiApp::Create(HINSTANCE instance, int showCmd,
     // WS_CLIPCHILDREN | WS_CLIPSIBLINGS: without them the custom-drawn progress
     // strips smear into neighbouring cells whenever something repaints.
     hwnd_ = ::CreateWindowExW(
-        0, kWndClass, L"wfd - file transfer",
+        0, kWndClass, I18n::Instance().CStr(Str::AppTitle),
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, CW_USEDEFAULT,
         CW_USEDEFAULT, Scale(1180), Scale(720), nullptr, nullptr, instance_, this);
     if (hwnd_ == nullptr) return false;
@@ -368,6 +381,16 @@ LRESULT GuiApp::Handle(UINT msg, WPARAM wParam, LPARAM lParam) {
             case IDC_CHK_BT:
                 ToggleBt(::SendMessageW(chkBt_, BM_GETCHECK, 0, 0) == BST_CHECKED);
                 return 0;
+            case IDM_LANG_EN:
+                I18n::Instance().SetLang(Lang::En);
+                I18n::Instance().SaveToIni();
+                ApplyLanguage();
+                return 0;
+            case IDM_LANG_ZH:
+                I18n::Instance().SetLang(Lang::Zh);
+                I18n::Instance().SaveToIni();
+                ApplyLanguage();
+                return 0;
             default: break;
             }
         }
@@ -419,6 +442,7 @@ LRESULT GuiApp::Handle(UINT msg, WPARAM wParam, LPARAM lParam) {
         // Order matters: stop the timer, tell the background loops to exit,
         // unblock the accept loops, only then make WakeUi() inert.
         ::KillTimer(hwnd_, IDT_REFRESH);
+        if (menu_ != nullptr) { ::SetMenu(hwnd_, nullptr); ::DestroyMenu(menu_); menu_ = nullptr; }
         shutdown_->store(true);
         tcp_.Stop();
         bt_.Stop();
@@ -441,25 +465,25 @@ void GuiApp::BuildControls() {
     theme_.Rebuild(hwnd_);
     HFONT font = theme_.Font();
 
-    btnFiles_  = CreateButton(hwnd_, instance_, font, L"&Pick files...", IDC_BTN_FILES);
-    btnSend_   = CreateButton(hwnd_, instance_, font, L"&Send selected", IDC_BTN_SEND);
-    btnCancel_ = CreateButton(hwnd_, instance_, font, L"Ca&ncel", IDC_BTN_CANCEL);
-    btnDir_    = CreateButton(hwnd_, instance_, font, L"Receive &folder...", IDC_BTN_DIR);
-    chkTcp_    = CreateButton(hwnd_, instance_, font, L"&TCP listen", IDC_CHK_TCP,
+    btnFiles_  = CreateButton(hwnd_, instance_, font, I18n::Instance().CStr(Str::BtnPickFiles), IDC_BTN_FILES);
+    btnSend_   = CreateButton(hwnd_, instance_, font, I18n::Instance().CStr(Str::BtnSendSelected), IDC_BTN_SEND);
+    btnCancel_ = CreateButton(hwnd_, instance_, font, I18n::Instance().CStr(Str::BtnCancel), IDC_BTN_CANCEL);
+    btnDir_    = CreateButton(hwnd_, instance_, font, I18n::Instance().CStr(Str::BtnReceiveFolder), IDC_BTN_DIR);
+    chkTcp_    = CreateButton(hwnd_, instance_, font, I18n::Instance().CStr(Str::ChkTcpListen), IDC_CHK_TCP,
                               BS_AUTOCHECKBOX);
-    chkBt_     = CreateButton(hwnd_, instance_, font, L"&Bluetooth listen",
+    chkBt_     = CreateButton(hwnd_, instance_, font, I18n::Instance().CStr(Str::ChkBtListen),
                               IDC_CHK_BT, BS_AUTOCHECKBOX);
-    btnBtScan_ = CreateButton(hwnd_, instance_, font, L"Bluetooth &scan", IDC_BTN_BTSCAN);
+    btnBtScan_ = CreateButton(hwnd_, instance_, font, I18n::Instance().CStr(Str::BtnBtScan), IDC_BTN_BTSCAN);
 
-    grpPeers_      = CreateGroup(hwnd_, instance_, font, L"Peers", IDC_GRP_PEERS);
-    grpTransfers_  = CreateGroup(hwnd_, instance_, font, L"Transfers", IDC_GRP_TRANSFERS);
-    grpLog_        = CreateGroup(hwnd_, instance_, font, L"Log", IDC_GRP_LOG);
+    grpPeers_      = CreateGroup(hwnd_, instance_, font, I18n::Instance().CStr(Str::GroupPeers), IDC_GRP_PEERS);
+    grpTransfers_  = CreateGroup(hwnd_, instance_, font, I18n::Instance().CStr(Str::GroupTransfers), IDC_GRP_TRANSFERS);
+    grpLog_        = CreateGroup(hwnd_, instance_, font, I18n::Instance().CStr(Str::GroupLog), IDC_GRP_LOG);
 
     peers_ = CreateList(hwnd_, instance_, font, IDC_LST_PEERS);
-    InsertColumn(peers_, 0, L"Name", 170);
-    InsertColumn(peers_, 1, L"Address", 150);
-    InsertColumn(peers_, 2, L"Kind", 90);
-    InsertColumn(peers_, 3, L"Seen", 70);
+    InsertColumn(peers_, 0, Str::PeerName, 170);
+    InsertColumn(peers_, 1, Str::PeerAddress, 150);
+    InsertColumn(peers_, 2, Str::PeerKind, 90);
+    InsertColumn(peers_, 3, Str::PeerSeen, 70);
 
     transfers_ = CreateList(hwnd_, instance_, font, IDC_LST_TRANSFERS);
     for (int i = 0; i < kTransferCols; ++i) {
@@ -467,8 +491,8 @@ void GuiApp::BuildControls() {
     }
 
     log_ = CreateList(hwnd_, instance_, font, IDC_LST_LOG);
-    InsertColumn(log_, 0, L"Time", 80);
-    InsertColumn(log_, 1, L"Message", 760);
+    InsertColumn(log_, 0, Str::LogTime, 80);
+    InsertColumn(log_, 1, Str::LogMessage, 760);
 
     status_ = ::CreateWindowExW(0, STATUSCLASSNAMEW, L"",
                                 WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0,
@@ -478,9 +502,65 @@ void GuiApp::BuildControls() {
                                 instance_, nullptr);
     ::SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 
+    CreateLanguageMenu();
+
     // The window handle is live from here on: hand it to the atomic so worker
     // threads can wake us.
     g_mainWnd.store(hwnd_, std::memory_order_release);
+}
+
+void GuiApp::CreateLanguageMenu() {
+    menu_ = ::CreateMenu();
+    HMENU popup = ::CreatePopupMenu();
+    ::AppendMenuW(popup, MF_STRING, IDM_LANG_EN, I18n::Instance().CStr(Str::MenuEnglish));
+    ::AppendMenuW(popup, MF_STRING, IDM_LANG_ZH, I18n::Instance().CStr(Str::MenuChinese));
+    ::AppendMenuW(menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(popup),
+                  I18n::Instance().CStr(Str::MenuLanguage));
+    ::SetMenu(hwnd_, menu_);
+    ::CheckMenuItem(menu_, I18n::Instance().lang() == Lang::Zh ? IDM_LANG_ZH : IDM_LANG_EN,
+                    MF_CHECKED);
+}
+
+void GuiApp::ApplyLanguage() {
+    // Buttons / group boxes.
+    ::SetWindowTextW(btnFiles_, I18n::Instance().CStr(Str::BtnPickFiles));
+    ::SetWindowTextW(btnSend_, I18n::Instance().CStr(Str::BtnSendSelected));
+    ::SetWindowTextW(btnCancel_, I18n::Instance().CStr(Str::BtnCancel));
+    ::SetWindowTextW(btnDir_, I18n::Instance().CStr(Str::BtnReceiveFolder));
+    ::SetWindowTextW(chkTcp_, I18n::Instance().CStr(Str::ChkTcpListen));
+    ::SetWindowTextW(chkBt_, I18n::Instance().CStr(Str::ChkBtListen));
+    ::SetWindowTextW(btnBtScan_, I18n::Instance().CStr(Str::BtnBtScan));
+    ::SetWindowTextW(grpPeers_, I18n::Instance().CStr(Str::GroupPeers));
+    ::SetWindowTextW(grpTransfers_, I18n::Instance().CStr(Str::GroupTransfers));
+    ::SetWindowTextW(grpLog_, I18n::Instance().CStr(Str::GroupLog));
+
+    // Column headers.
+    const Str peerCols[] = { Str::PeerName, Str::PeerAddress, Str::PeerKind, Str::PeerSeen };
+    for (int i = 0; i < 4; ++i) SetColumnText(peers_, i, peerCols[i]);
+    for (int i = 0; i < kTransferCols; ++i) SetColumnText(transfers_, i, kTransferHeaders[i]);
+    SetColumnText(log_, 0, Str::LogTime);
+    SetColumnText(log_, 1, Str::LogMessage);
+
+    // Top-level menu caption + language check marks.
+    if (menu_ != nullptr) {
+        HMENU popup = ::GetSubMenu(menu_, 0);
+        if (popup != nullptr) {
+            ::ModifyMenuW(menu_, 0, MF_BYPOSITION | MF_POPUP | MF_STRING,
+                          reinterpret_cast<UINT_PTR>(popup),
+                          I18n::Instance().CStr(Str::MenuLanguage));
+        }
+        ::CheckMenuItem(menu_, IDM_LANG_EN, MF_UNCHECKED);
+        ::CheckMenuItem(menu_, IDM_LANG_ZH, MF_UNCHECKED);
+        ::CheckMenuItem(menu_, I18n::Instance().lang() == Lang::Zh ? IDM_LANG_ZH : IDM_LANG_EN,
+                        MF_CHECKED);
+        ::DrawMenuBar(hwnd_);
+    }
+
+    // Force a full model re-render so state/direction/detail labels and the
+    // title/status templates are rebuilt from the new language. (SyncModel
+    // updates title + status unconditionally, before the revision check.)
+    lastRevision_ = ~0ull;
+    SyncModel(true);
 }
 
 void GuiApp::Layout(RECT c) {
@@ -624,7 +704,7 @@ void GuiApp::FillPeers(const ui::Snapshot& s) {
         InsertRow(peers_, i, U8(p.name.empty() ? p.key : p.name));
         SetCell(peers_, i, 1, U8(p.key));
         SetCell(peers_, i, 2, PeerKindText(p.kind));
-        SetCell(peers_, i, 3, p.stale ? L"stale" : L"live");
+        SetCell(peers_, i, 3, I18n::Instance().CStr(p.stale ? Str::PeerStale : Str::PeerLive));
         peerKeys_.push_back(p.key);
         peerTransports_.push_back(p.transport);
         ++i;
@@ -654,7 +734,7 @@ void GuiApp::BuildTransferMirrors(const ui::Snapshot& s,
         m.peer = r.peer;
         m.sourcePath = r.sourcePath;
         m.name = r.name;
-        m.cell[COL_DIR] = L"out";
+        m.cell[COL_DIR] = I18n::Instance().Get(Str::DirOut);
         m.cell[COL_STATE] = StateText(r.state);
         m.cell[COL_NAME] = U8(r.name);
         m.cell[COL_PEER] = U8(r.peer);
@@ -670,8 +750,9 @@ void GuiApp::BuildTransferMirrors(const ui::Snapshot& s,
         std::wstring detail;
         if (!r.detail.empty()) detail = U8(r.detail);
         else if (r.state == ui::TaskState::Completed && !r.sha256.empty())
-            detail = Text(L"sha256 %ls", U8(r.sha256.substr(0, 16)).c_str());
-        if (r.cancelRequested) detail = L"canceling... " + detail;
+            detail = Text(I18n::Instance().CStr(Str::DetailSha256Prefix),
+                          U8(r.sha256.substr(0, 16)).c_str());
+        if (r.cancelRequested) detail = I18n::Instance().Get(Str::DetailCanceling) + detail;
         m.cell[COL_DETAIL] = detail;
         out.push_back(std::move(m));
     }
@@ -685,7 +766,7 @@ void GuiApp::BuildTransferMirrors(const ui::Snapshot& s,
         m.isSend = false;
         m.peer = r.peer;
         m.name = r.name;
-        m.cell[COL_DIR] = L"in";
+        m.cell[COL_DIR] = I18n::Instance().Get(Str::DirIn);
         m.cell[COL_STATE] = StateText(r.state);
         m.cell[COL_NAME] = U8(r.name);
         m.cell[COL_PEER] = U8(r.peer);
@@ -699,8 +780,8 @@ void GuiApp::BuildTransferMirrors(const ui::Snapshot& s,
             r.state == ui::TaskState::Running ? EtaText(r.etaSec) : L"-";
         std::wstring detail;
         if (!r.error.empty()) detail = U8(r.error);
-        else if (r.integrityVerified) detail = L"sha256 verified";
-        else if (r.state == ui::TaskState::Completed) detail = L"no hash trailer";
+        else if (r.integrityVerified) detail = I18n::Instance().Get(Str::DetailSha256Verified);
+        else if (r.state == ui::TaskState::Completed) detail = I18n::Instance().Get(Str::DetailNoHashTrailer);
         else if (!r.savedPath.empty()) detail = U8(r.savedPath);
         m.cell[COL_DETAIL] = detail;
         out.push_back(std::move(m));
@@ -801,7 +882,7 @@ void GuiApp::UpdateChrome(const ui::Snapshot& s) {
                    s.btListening ? BST_CHECKED : BST_UNCHECKED, 0);
     RefreshCancelButton();
     const std::wstring title = Text(
-        L"wfd - %d peers, %d transfers, receive -> %ls",
+        I18n::Instance().CStr(Str::TitleTemplate),
         static_cast<int>(s.peers.size()),
         static_cast<int>(s.sends.size() + s.recvs.size()),
         U8(s.receiveDir).c_str());
@@ -817,15 +898,19 @@ void GuiApp::UpdateStatus(const ui::Snapshot& s) {
 
     // Counts go through int, not %zu: this string is formatted by vsnwprintf,
     // which on the msvcrt/UCRT side does not reliably implement the z modifier.
+    const std::wstring onPort = Text(I18n::Instance().CStr(Str::StatusOnPort), s.tcpPort);
+    const std::wstring on = I18n::Instance().Get(Str::StatusOn);
+    const std::wstring off = I18n::Instance().Get(Str::StatusOff);
     const std::wstring conn = Text(
-        L"TCP: %ls   BT: %ls   beacon: %ls",
-        s.tcpListening ? Text(L"on %d", s.tcpPort).c_str() : L"off",
-        s.btListening ? L"on" : L"off",
-        s.beaconRunning ? L"on" : L"off");
+        I18n::Instance().CStr(Str::StatusConn),
+        (s.tcpListening ? onPort : off).c_str(),
+        (s.btListening ? on : off).c_str(),
+        (s.beaconRunning ? on : off).c_str());
     const std::wstring counts = Text(
-        L"peers: %d   running: %d",
+        I18n::Instance().CStr(Str::StatusCounts),
         static_cast<int>(s.peers.size()), static_cast<int>(running));
-    const std::wstring dest = Text(L"receive: %ls", U8(s.receiveDir).c_str());
+    const std::wstring dest = Text(I18n::Instance().CStr(Str::StatusReceive),
+                                   U8(s.receiveDir).c_str());
 
     ::SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(conn.c_str()));
     ::SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(counts.c_str()));
@@ -1262,6 +1347,10 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCmd) {
     cfg.peerStaleMs = 8000;
     cfg.peerTtlMs = 0;   // stale peers stay visible; the Kind column says so
     auto model = std::make_shared<wfd::ui::UiModel>(cfg);
+
+    // Resolve GUI language before controls are built: explicit ini choice wins,
+    // otherwise follow the Windows UI language (Chinese -> zh, else en).
+    wfd::gui::I18n::Instance().LoadFromIni();
 
     {
         GuiApp app(model);

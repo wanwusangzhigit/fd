@@ -142,6 +142,7 @@ if(WFD_PLATFORM_WINDOWS)
     enable_language(RC)
     add_executable(wfd_gui WIN32
         src/gui/GuiApp.cpp
+        src/gui/I18n.cpp
         src/gui/Theme.cpp
         src/gui/Win32Util.cpp
         src/gui/wfd_gui.rc

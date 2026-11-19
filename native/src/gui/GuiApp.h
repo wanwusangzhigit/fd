@@ -93,6 +93,8 @@ private:
         IDC_GRP_PEERS = 1101,
         IDC_GRP_TRANSFERS,
         IDC_GRP_LOG,
+        IDM_LANG_EN = 2001,   // menu commands use HIWORD(wParam)==0
+        IDM_LANG_ZH = 2002,
     };
     enum : UINT_PTR { IDT_REFRESH = 1 };
 
@@ -116,6 +118,8 @@ private:
     LRESULT Handle(UINT msg, WPARAM wParam, LPARAM lParam);
 
     void BuildControls();
+    void CreateLanguageMenu();
+    void ApplyLanguage();
     void Layout(RECT client);
     void OnDpiChanged(LPARAM lParam);
     void ApplyFontToChildren();
@@ -167,6 +171,7 @@ private:
     HWND chkTcp_ = nullptr;
     HWND chkBt_ = nullptr;
     HWND btnBtScan_ = nullptr;
+    HMENU menu_ = nullptr;
 
     std::string receiveDir_;
     int tcpPort_ = 0;
