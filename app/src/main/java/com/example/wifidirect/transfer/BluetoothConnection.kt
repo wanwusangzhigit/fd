@@ -4,6 +4,8 @@ import android.bluetooth.BluetoothSocket
 import android.content.ContentResolver
 import android.net.Uri
 import android.util.Log
+import com.example.wifidirect.App
+import com.example.wifidirect.R
 import com.example.wifidirect.util.streamTo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +64,7 @@ class BluetoothSenderConnection(
                 Log.e(TAG, "BT send failed", e)
                 val evt = if (e is kotlinx.coroutines.CancellationException)
                     TransferEvent.Canceled(id)
-                else TransferEvent.Failed(id, e.message ?: "Bluetooth send failed")
+                else TransferEvent.Failed(id, e.message ?: App.instance.getString(R.string.fail_send))
                 TransferBus.emit(evt)
             } finally {
                 sendJobs.remove(id)
@@ -149,7 +151,7 @@ class BluetoothReceiverConnection(
                 } catch (e: Exception) {
                     Log.e(TAG, "BT receive file failed", e)
                     try { sink.rollback() } catch (_: Exception) {}
-                    TransferBus.emit(TransferEvent.Failed(rid, e.message ?: "Receive failed"))
+                    TransferBus.emit(TransferEvent.Failed(rid, e.message ?: App.instance.getString(R.string.fail_receive)))
                 }
             }
         } catch (e: Exception) {

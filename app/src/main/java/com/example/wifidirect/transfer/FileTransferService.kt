@@ -133,7 +133,7 @@ class FileTransferService : LifecycleService() {
                 }
             } catch (e: BindException) {
                 Log.e(TAG, "无法绑定 ${Constants.WIFI_FILE_PORT}，可能已被占用", e)
-                emit(TransferEvent.Failed("server-file", "Port ${Constants.WIFI_FILE_PORT} in use"))
+                emit(TransferEvent.Failed("server-file", getString(R.string.fail_port_in_use, Constants.WIFI_FILE_PORT)))
             } catch (e: Exception) {
                 Log.e(TAG, "file server crashed", e)
             } finally {
@@ -195,7 +195,7 @@ class FileTransferService : LifecycleService() {
             } catch (e: Exception) {
                 Log.e(TAG, "receive stream failed", e)
                 try { sink.rollback() } catch (_: Exception) {}
-                emit(TransferEvent.Failed(transferId, e.message ?: "Receive failed"))
+                emit(TransferEvent.Failed(transferId, e.message ?: getString(R.string.fail_receive)))
             }
         }
     }
@@ -293,7 +293,7 @@ class FileTransferService : LifecycleService() {
             emit(TransferEvent.Completed(id))
         } catch (e: Exception) {
             Log.e(TAG, "sendOverTcp failed", e)
-            val message = if (e is kotlinx.coroutines.CancellationException) "Canceled" else (e.message ?: "Send failed")
+            val message = if (e is kotlinx.coroutines.CancellationException) getString(R.string.status_canceled) else (e.message ?: getString(R.string.fail_send))
             emit(if (e is kotlinx.coroutines.CancellationException) TransferEvent.Canceled(id)
                  else TransferEvent.Failed(id, message))
         } finally {

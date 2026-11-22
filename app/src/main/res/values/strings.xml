@@ -21,11 +21,9 @@
     <string name="bt_disabled_status">Bluetooth: off</string>
     <string name="empty_devices">No devices yet. Tap Discover above.</string>
     <string name="send_hint">Tap a device below to send the selected file(s).</string>
-    <string name="selected_file_label">Selected: %1$s (%2$s)</string>
 
     <!-- Toasts / messages -->
     <string name="no_file_selected">No file selected</string>
-    <string name="toast_file_selected">File selected. Now pick a peer to send to.</string>
     <string name="toast_received">Received: %1$s</string>
     <string name="toast_sending_via_wfd">Sending %1$s via Wi-Fi Direct…</string>
     <string name="pick_file_first">Pick a file first</string>
@@ -80,4 +78,41 @@
         <item quantity="one">Sending 1 file via Wi-Fi Direct…</item>
         <item quantity="other">Sending %d files via Wi-Fi Direct…</item>
     </plurals>
+
+    <!-- Status messages shown in the status bar (full self-describing sentences) -->
+    <string name="fallback_file_name">file</string>
+    <string name="unknown">Unknown</string>
+    <string name="wfd_channel_disconnected">Wi-Fi Direct: P2P channel disconnected</string>
+    <string name="wfd_initialized">Wi-Fi Direct: initialized</string>
+    <string name="wfd_enabled">Wi-Fi Direct: enabled</string>
+    <string name="wfd_disabled">Wi-Fi Direct: disabled</string>
+    <string name="wfd_not_supported">Wi-Fi Direct: not supported on this device</string>
+    <string name="wfd_unavailable">Wi-Fi Direct: unavailable</string>
+    <string name="wfd_perm_discovery">Wi-Fi Direct: missing permissions for discovery</string>
+    <string name="wfd_perm_connect">Wi-Fi Direct: missing permissions for connection</string>
+    <string name="discovery_started">Discovery started</string>
+    <string name="discovery_start_failed">Discovery failed to start</string>
+    <string name="discovery_failed">Discovery failed: %1$s</string>
+    <string name="connect_timeout">Connection timed out</string>
+    <string name="connect_failed">Connect failed: %1$s</string>
+    <string name="wfd_disconnected">Disconnected from group</string>
+    <string name="disconnect_failed">Disconnect failed: %1$s</string>
+    <string name="reason_p2p_unsupported">P2P unsupported</string>
+    <string name="reason_busy">framework busy</string>
+    <string name="reason_error">internal error</string>
+    <string name="reason_unknown">reason %1$d</string>
+    <string name="bt_unavailable">Bluetooth: unavailable</string>
+    <string name="bt_discovery_finished">Bluetooth: discovery finished</string>
+    <string name="bt_enable_first">Bluetooth: enable it first</string>
+    <string name="bt_discovery_denied">Bluetooth: discovery denied: %1$s</string>
+    <string name="bt_perm_missing">Bluetooth: missing permissions</string>
+    <string name="bt_connected_to">Bluetooth: connected to %1$s</string>
+    <string name="bt_socket_create_failed">Bluetooth: cannot create socket</string>
+    <string name="bt_server_perm_missing">Bluetooth: cannot start server (permissions missing)</string>
+    <string name="bt_listen_failed">Bluetooth: cannot listen: %1$s</string>
+    <string name="bt_server_listening">Bluetooth: server listening…</string>
+    <string name="bt_incoming_from">Bluetooth: incoming connection from %1$s</string>
+    <string name="fail_port_in_use">Port %1$d in use</string>
+    <string name="fail_receive">Receive failed</string>
+    <string name="fail_send">Send failed</string>
 </resources>

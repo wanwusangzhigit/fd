@@ -294,13 +294,13 @@ class MainActivity : AppCompatActivity() {
         // Wi-Fi Direct 状态消息
         lifecycleScope.launch {
             wifi.statusMessage.collectLatest { msg ->
-                if (msg.isNotEmpty()) binding.statusWifi.text = "Wi-Fi Direct: $msg"
+                if (msg.isNotEmpty()) binding.statusWifi.text = msg
             }
         }
         // 蓝牙状态消息
         lifecycleScope.launch {
             bt.statusMessage.collectLatest { msg ->
-                if (msg.isNotEmpty()) binding.statusBt.text = "Bluetooth: $msg"
+                if (msg.isNotEmpty()) binding.statusBt.text = msg
             }
         }
         // Wi-Fi 连接状态变化 —— 自动上报 IP / 自动 flush 待发送
@@ -610,7 +610,7 @@ class MainActivity : AppCompatActivity() {
                 if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) size = cursor.getLong(sizeIdx)
             }
         }
-        if (name.isNullOrBlank()) name = uri.lastPathSegment ?: "file"
+        if (name.isNullOrBlank()) name = uri.lastPathSegment ?: getString(R.string.fallback_file_name)
         return name!! to size
     }
 

@@ -17,6 +17,7 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.annotation.RequiresPermission
+import com.example.wifidirect.R
 import com.example.wifidirect.transfer.Constants
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -71,7 +72,7 @@ class WiFiDirectManager(private val context: Context) {
     init {
         channel = manager?.initialize(context, context.mainLooper, WifiP2pManager.ChannelListener {
             Log.w(TAG, "Wi-Fi P2P channel disconnected, retry")
-            _statusMessage.value = "P2P channel disconnected"
+            _statusMessage.value = context.getString(R.string.wfd_channel_disconnected)
         })
     }
 
@@ -80,7 +81,7 @@ class WiFiDirectManager(private val context: Context) {
 
     fun initialize(activity: Activity): Boolean {
         if (!isP2pSupported) {
-            _statusMessage.value = "Wi-Fi Direct not supported on this device"
+            _statusMessage.value = context.getString(R.string.wfd_not_supported)
             return false
         }
 
@@ -89,7 +90,7 @@ class WiFiDirectManager(private val context: Context) {
         }
 
         registerReceiver()
-        _statusMessage.value = "Wi-Fi Direct initialized"
+        _statusMessage.value = context.getString(R.string.wfd_initialized)
         return true
     }
 
@@ -109,8 +110,8 @@ class WiFiDirectManager(private val context: Context) {
                             WifiP2pManager.EXTRA_WIFI_STATE, -1
                         )
                         val enabled = state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
-                        _statusMessage.value =
-                            if (enabled) "Wi-Fi Direct enabled" else "Wi-Fi Direct disabled"
+                        _statusMessage.value = context.getString(
+                            if (enabled) R.string.wfd_enabled else R.string.wfd_disabled)
                     }
 
                     WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
@@ -160,9 +161,9 @@ class WiFiDirectManager(private val context: Context) {
             connectTimeoutJob = null
             _pendingConnect.value = null
             if (info.groupFormed) {
-                _statusMessage.value =
-                    if (info.isGroupOwner) "Group owner at ${info.groupOwnerAddress}"
-                    else "Connected as client to ${info.groupOwnerAddress}"
+                _statusMessage.value = context.getString(
+                    if (info.isGroupOwner) R.string.wfd_group_owner
+                    else R.string.wfd_client, info.groupOwnerAddress)
             }
         }
     }
@@ -173,20 +174,20 @@ class WiFiDirectManager(private val context: Context) {
     ])
     fun discoverPeers() {
         if (!hasPermissions()) {
-            _statusMessage.value = "Missing permissions for peer discovery"
+            _statusMessage.value = context.getString(R.string.wfd_perm_discovery)
             return
         }
         manager?.let { m ->
             m.discoverPeers(channel, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
-                    _statusMessage.value = "Discovery started"
+                    _statusMessage.value = context.getString(R.string.discovery_started)
                 }
 
                 override fun onFailure(reason: Int) {
-                    _statusMessage.value = "Discovery failed: ${reasonText(reason)}"
+                    _statusMessage.value = context.getString(R.string.discovery_failed, reasonText(reason))
                 }
             })
-        } ?: run { _statusMessage.value = "Wi-Fi Direct unavailable" }
+        } ?: run { _statusMessage.value = context.getString(R.string.wfd_unavailable) }
     }
 
     @RequiresPermission(anyOf = [
@@ -195,7 +196,7 @@ class WiFiDirectManager(private val context: Context) {
     ])
     fun connect(device: WifiP2pDevice) {
         if (!hasPermissions()) {
-            _statusMessage.value = "Missing permissions for connection"
+            _statusMessage.value = context.getString(R.string.wfd_perm_connect)
             return
         }
         manager?.let { m ->
@@ -204,21 +205,21 @@ class WiFiDirectManager(private val context: Context) {
             }
             m.connect(channel, config, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
-                    _statusMessage.value = "Connecting to ${device.deviceName}..."
+                    _statusMessage.value = context.getString(R.string.connecting_to, device.deviceName)
                     _pendingConnect.value = device.deviceAddress
                     // 启动超时清理：超过阈值仍没收到 connectionInfo，就告知调用方放弃
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = scope.launch {
                         delay(Constants.WFD_CONNECT_TIMEOUT_MS)
                         if (_pendingConnect.value != null) {
-                            _statusMessage.value = "Connect timed out"
+                            _statusMessage.value = context.getString(R.string.connect_timeout)
                             _pendingConnect.value = null
                         }
                     }
                 }
 
                 override fun onFailure(reason: Int) {
-                    _statusMessage.value = "Connect failed: ${reasonText(reason)}"
+                    _statusMessage.value = context.getString(R.string.connect_failed, reasonText(reason))
                     _pendingConnect.value = null
                 }
             })
@@ -228,11 +229,11 @@ class WiFiDirectManager(private val context: Context) {
     fun disconnectFromGroup() {
         manager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
-                _statusMessage.value = "Disconnected from group"
+                _statusMessage.value = context.getString(R.string.wfd_disconnected)
             }
 
             override fun onFailure(reason: Int) {
-                _statusMessage.value = "Disconnect failed: ${reasonText(reason)}"
+                _statusMessage.value = context.getString(R.string.disconnect_failed, reasonText(reason))
             }
         })
     }
@@ -245,10 +246,10 @@ class WiFiDirectManager(private val context: Context) {
     }
 
     private fun reasonText(reason: Int): String = when (reason) {
-        WifiP2pManager.P2P_UNSUPPORTED -> "P2P unsupported"
-        WifiP2pManager.BUSY -> "framework busy"
-        WifiP2pManager.ERROR -> "internal error"
-        else -> "reason $reason"
+        WifiP2pManager.P2P_UNSUPPORTED -> context.getString(R.string.reason_p2p_unsupported)
+        WifiP2pManager.BUSY -> context.getString(R.string.reason_busy)
+        WifiP2pManager.ERROR -> context.getString(R.string.reason_error)
+        else -> context.getString(R.string.reason_unknown, reason)
     }
 
     private fun hasPermissions(): Boolean {

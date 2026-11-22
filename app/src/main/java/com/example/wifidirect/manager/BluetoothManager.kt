@@ -16,6 +16,8 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.annotation.RequiresPermission
+import com.example.wifidirect.App
+import com.example.wifidirect.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,8 +78,8 @@ class BluetoothManager(private val context: Context) {
     @get:RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     val adapterName: String
         get() = if (hasPermissions()) {
-            try { adapter?.name ?: "Unknown" } catch (e: SecurityException) { "Unknown" }
-        } else "Unknown"
+            try { adapter?.name ?: context.getString(R.string.unknown) } catch (e: SecurityException) { context.getString(R.string.unknown) }
+        } else context.getString(R.string.unknown)
 
     private val _incomingSocket = MutableStateFlow<BluetoothSocket?>(null)
     val incomingSocket: StateFlow<BluetoothSocket?> = _incomingSocket
@@ -117,12 +119,12 @@ class BluetoothManager(private val context: Context) {
 
                     BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
                         _isDiscovering.value = true
-                        _statusMessage.value = "Bluetooth discovery started"
+                        _statusMessage.value = context.getString(R.string.discovery_started)
                     }
 
                     BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
                         _isDiscovering.value = false
-                        _statusMessage.value = "Bluetooth discovery finished"
+                        _statusMessage.value = context.getString(R.string.bt_discovery_finished)
                     }
 
                     BluetoothDevice.ACTION_FOUND -> {
@@ -160,11 +162,11 @@ class BluetoothManager(private val context: Context) {
             return
         }
         val a = adapter ?: run {
-            _statusMessage.value = "Bluetooth unavailable"
+            _statusMessage.value = context.getString(R.string.bt_unavailable)
             return
         }
         if (!a.isEnabled) {
-            _statusMessage.value = "Enable Bluetooth first"
+            _statusMessage.value = context.getString(R.string.bt_enable_first)
             return
         }
         refreshPaired()
@@ -176,9 +178,10 @@ class BluetoothManager(private val context: Context) {
         }
         try {
             val ok = a.startDiscovery()
-            _statusMessage.value = if (ok) "Discovery started" else "Discovery failed to start"
+            _statusMessage.value = context.getString(
+                if (ok) R.string.discovery_started else R.string.discovery_start_failed)
         } catch (e: SecurityException) {
-            _statusMessage.value = "Discovery denied: ${e.message}"
+            _statusMessage.value = context.getString(R.string.bt_discovery_denied, e.message)
         }
     }
 
@@ -196,7 +199,7 @@ class BluetoothManager(private val context: Context) {
     fun connectToDevice(device: BluetoothDevice, onResult: (BluetoothSocket?) -> Unit) {
         scope.launch {
             if (!hasPermissions()) {
-                _statusMessage.value = "Missing Bluetooth permissions"
+                _statusMessage.value = context.getString(R.string.bt_perm_missing)
                 return@launch
             }
             try {
@@ -204,17 +207,17 @@ class BluetoothManager(private val context: Context) {
                 val socket: BluetoothSocket? = device.createRfcommSocketToServiceRecord(APP_UUID)
                 try {
                     socket?.connect()
-                    _statusMessage.value = "Bluetooth connected to ${device.safeName()}"
+                    _statusMessage.value = context.getString(R.string.bt_connected_to, device.safeName())
                     onResult(socket)
                 } catch (e: IOException) {
                     Log.w(TAG, "connect() failed", e)
                     try { socket?.close() } catch (_: IOException) {}
-                    _statusMessage.value = "Bluetooth connect failed: ${e.message}"
+                    _statusMessage.value = context.getString(R.string.connect_failed, e.message)
                     onResult(null)
                 }
             } catch (e: SecurityException) {
                 Log.w(TAG, "create socket denied", e)
-                _statusMessage.value = "Cannot create Bluetooth socket"
+                _statusMessage.value = context.getString(R.string.bt_socket_create_failed)
                 onResult(null)
             }
         }
@@ -232,7 +235,7 @@ class BluetoothManager(private val context: Context) {
         runningServer = true
         scope.launch {
             if (!hasPermissions()) {
-                _statusMessage.value = "Cannot start BT server: permissions missing"
+                _statusMessage.value = context.getString(R.string.bt_server_perm_missing)
                 runningServer = false
                 return@launch
             }
@@ -241,17 +244,17 @@ class BluetoothManager(private val context: Context) {
                 localServer = adapter?.listenUsingRfcommWithServiceRecord(APP_NAME, APP_UUID)
             } catch (e: IOException) {
                 Log.w(TAG, "listen failed", e)
-                _statusMessage.value = "Cannot listen on Bluetooth: ${e.message}"
+                _statusMessage.value = context.getString(R.string.bt_listen_failed, e.message)
                 runningServer = false
                 return@launch
             } catch (e: SecurityException) {
                 Log.w(TAG, "listen denied", e)
-                _statusMessage.value = "Cannot listen on Bluetooth: ${e.message}"
+                _statusMessage.value = context.getString(R.string.bt_listen_failed, e.message)
                 runningServer = false
                 return@launch
             }
             serverSocket = localServer
-            _statusMessage.value = "Bluetooth server listening..."
+            _statusMessage.value = context.getString(R.string.bt_server_listening)
             while (runningServer) {
                 val accepted = try {
                     localServer?.accept()
@@ -266,8 +269,8 @@ class BluetoothManager(private val context: Context) {
                     Log.w(TAG, "accept denied", e); null
                 }
                 if (accepted == null) continue
-                _statusMessage.value =
-                    "Incoming Bluetooth connection from ${accepted.remoteDevice?.safeName()}"
+                _statusMessage.value = context.getString(
+                    R.string.bt_incoming_from, accepted.remoteDevice?.safeName())
                 _incomingSocket.value = accepted
                 // 把对端连接交给调用方处理，循环立刻继续接受下一个连接。
                 scope.launch { onAccepted(accepted) }
@@ -330,9 +333,10 @@ class BluetoothManager(private val context: Context) {
 }
 
 fun BluetoothDevice.safeName(): String {
+    val unknown = App.instance.getString(R.string.unknown)
     return try {
-        name ?: "Unknown"
+        name ?: unknown
     } catch (e: SecurityException) {
-        "Unknown"
+        unknown
     }
 }

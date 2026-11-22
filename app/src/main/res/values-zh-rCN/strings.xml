@@ -21,11 +21,9 @@
     <string name="bt_disabled_status">蓝牙：未开启</string>
     <string name="empty_devices">还没有设备。点击上方「发现」按钮搜索。</string>
     <string name="send_hint">点击下方任意设备发送已选文件。</string>
-    <string name="selected_file_label">已选：%1$s（%2$s）</string>
 
     <!-- Toast / 提示 -->
     <string name="no_file_selected">未选择文件</string>
-    <string name="toast_file_selected">已选择文件，请点击对端设备发送。</string>
     <string name="toast_received">已收到：%1$s</string>
     <string name="toast_sending_via_wfd">正在通过 Wi-Fi Direct 发送 %1$s…</string>
     <string name="pick_file_first">请先选择文件</string>
@@ -77,4 +75,41 @@
     <plurals name="toast_sending_via_wfd_batch">
         <item quantity="other">正在通过 Wi-Fi Direct 发送 %d 个文件…</item>
     </plurals>
+
+    <!-- 状态栏消息（完整自描述句子） -->
+    <string name="fallback_file_name">文件</string>
+    <string name="unknown">未知</string>
+    <string name="wfd_channel_disconnected">Wi-Fi Direct：P2P 通道已断开</string>
+    <string name="wfd_initialized">Wi-Fi Direct：已初始化</string>
+    <string name="wfd_enabled">Wi-Fi Direct：已开启</string>
+    <string name="wfd_disabled">Wi-Fi Direct：已关闭</string>
+    <string name="wfd_not_supported">Wi-Fi Direct：此设备不支持</string>
+    <string name="wfd_unavailable">Wi-Fi Direct：不可用</string>
+    <string name="wfd_perm_discovery">Wi-Fi Direct：缺少发现设备所需权限</string>
+    <string name="wfd_perm_connect">Wi-Fi Direct：缺少连接所需权限</string>
+    <string name="discovery_started">发现已开始</string>
+    <string name="discovery_start_failed">启动发现失败</string>
+    <string name="discovery_failed">发现失败：%1$s</string>
+    <string name="connect_timeout">连接超时</string>
+    <string name="connect_failed">连接失败：%1$s</string>
+    <string name="wfd_disconnected">已断开组连接</string>
+    <string name="disconnect_failed">断开失败：%1$s</string>
+    <string name="reason_p2p_unsupported">P2P 不受支持</string>
+    <string name="reason_busy">系统框架忙</string>
+    <string name="reason_error">内部错误</string>
+    <string name="reason_unknown">原因 %1$d</string>
+    <string name="bt_unavailable">蓝牙：不可用</string>
+    <string name="bt_discovery_finished">蓝牙：发现已结束</string>
+    <string name="bt_enable_first">蓝牙：请先开启蓝牙</string>
+    <string name="bt_discovery_denied">蓝牙：发现被拒绝：%1$s</string>
+    <string name="bt_perm_missing">蓝牙：缺少权限</string>
+    <string name="bt_connected_to">蓝牙：已连接到 %1$s</string>
+    <string name="bt_socket_create_failed">蓝牙：无法创建 socket</string>
+    <string name="bt_server_perm_missing">蓝牙：无法启动监听（缺少权限）</string>
+    <string name="bt_listen_failed">蓝牙：无法监听：%1$s</string>
+    <string name="bt_server_listening">蓝牙：监听中…</string>
+    <string name="bt_incoming_from">蓝牙：收到来自 %1$s 的连接</string>
+    <string name="fail_port_in_use">端口 %1$d 被占用</string>
+    <string name="fail_receive">接收失败</string>
+    <string name="fail_send">发送失败</string>
 </resources>
