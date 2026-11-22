@@ -1,174 +1,216 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/swipeRefresh"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:fillViewport="true">
-
-    <LinearLayout
+    <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="12dp">
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/header_transport"
-            android:textStyle="bold"
-            android:textSize="18sp"
-            android:paddingBottom="8dp" />
-
-        <!-- Discovery controls -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnDiscoverWifi"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginEnd="4dp"
-                android:text="@string/discover_wifi" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnDiscoverBt"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="4dp"
-                android:text="@string/discover_bt" />
-        </LinearLayout>
+        android:layout_height="match_parent"
+        android:fillViewport="true">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
+            android:orientation="vertical"
+            android:padding="@dimen/screen_padding">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnStartBtServer"
-                style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="0dp"
+            <TextView
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginEnd="4dp"
-                android:text="@string/start_bt_server" />
+                android:text="@string/header_transport"
+                android:textStyle="bold"
+                android:textSize="18sp"
+                android:paddingBottom="8dp" />
 
+            <!-- Discovery controls: 两列等宽，单行省略避免折行重叠 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="@dimen/row_spacing">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDiscoverWifi"
+                    style="@style/Widget.Material3.Button"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="@dimen/row_spacing"
+                    android:minWidth="0dp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="@string/discover_wifi" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDiscoverBt"
+                    style="@style/Widget.Material3.Button"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="@dimen/row_spacing"
+                    android:minWidth="0dp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="@string/discover_bt" />
+            </LinearLayout>
+
+            <!-- 第二行：BT server + History 两列 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="@dimen/row_spacing">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnStartBtServer"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="@dimen/row_spacing"
+                    android:minWidth="0dp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="@string/start_bt_server" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnHistory"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="@dimen/row_spacing"
+                    android:minWidth="0dp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="@string/history" />
+            </LinearLayout>
+
+            <!-- Disconnect Wi-Fi 单独一行显隐，避免 weight 重分配挤压邻居 -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnStopWifi"
                 style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
+                android:layout_marginBottom="@dimen/row_spacing"
+                android:minWidth="0dp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
                 android:visibility="gone"
                 android:text="@string/disconnect_wifi" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnHistory"
-                style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="0dp"
+            <!-- Status lines -->
+            <TextView
+                android:id="@+id/statusWifi"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="4dp"
-                android:text="@string/history" />
+                android:text="@string/wifi_idle"
+                android:textSize="13sp"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:paddingBottom="2dp" />
+
+            <TextView
+                android:id="@+id/statusBt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/bt_idle"
+                android:textSize="13sp"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:paddingBottom="8dp" />
+
+            <!-- File selection -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPickFile"
+                style="@style/Widget.Material3.Button"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:text="@string/pick_file" />
+
+            <TextView
+                android:id="@+id/selectedFile"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="13sp"
+                android:maxLines="2"
+                android:ellipsize="middle"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:text="" />
+
+            <TextView
+                android:id="@+id/sendHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/send_hint"
+                android:textStyle="italic"
+                android:visibility="gone"
+                android:paddingBottom="8dp" />
+
+            <!-- Devices header -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/header_devices"
+                android:textStyle="bold"
+                android:textSize="16sp"
+                android:paddingTop="8dp"
+                android:paddingBottom="4dp" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/deviceList"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/list_height"
+                android:nestedScrollingEnabled="false"
+                android:visibility="gone"
+                tools:listitem="@layout/item_device" />
+
+            <TextView
+                android:id="@+id/emptyView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/empty_devices"
+                android:textSize="13sp"
+                android:gravity="center"
+                android:padding="16dp"
+                android:visibility="visible" />
+
+            <!-- Transfers header -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/header_transfers"
+                android:textStyle="bold"
+                android:textSize="16sp"
+                android:paddingTop="12dp"
+                android:paddingBottom="4dp" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/transferList"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/list_height"
+                android:nestedScrollingEnabled="false"
+                tools:listitem="@layout/item_transfer" />
+
         </LinearLayout>
-
-        <!-- Status lines -->
-        <TextView
-            android:id="@+id/statusWifi"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/wifi_idle"
-            android:textSize="13sp"
-            android:paddingBottom="2dp" />
-
-        <TextView
-            android:id="@+id/statusBt"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/bt_idle"
-            android:textSize="13sp"
-            android:paddingBottom="8dp" />
-
-        <!-- File selection -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnPickFile"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/pick_file" />
-
-        <TextView
-            android:id="@+id/selectedFile"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:text="" />
-
-        <TextView
-            android:id="@+id/sendHint"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/send_hint"
-            android:textStyle="italic"
-            android:visibility="gone"
-            android:paddingBottom="8dp" />
-
-        <!-- Devices header -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/header_devices"
-            android:textStyle="bold"
-            android:textSize="16sp"
-            android:paddingTop="8dp"
-            android:paddingBottom="4dp" />
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/deviceList"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:nestedScrollingEnabled="false"
-            android:minHeight="120dp" />
-
-        <TextView
-            android:id="@+id/emptyView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/empty_devices"
-            android:textSize="13sp"
-            android:gravity="center"
-            android:padding="16dp"
-            android:visibility="visible" />
-
-        <!-- Transfers header -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/header_transfers"
-            android:textStyle="bold"
-            android:textSize="16sp"
-            android:paddingTop="12dp"
-            android:paddingBottom="4dp" />
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/transferList"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:nestedScrollingEnabled="false" />
-
-    </LinearLayout>
-</ScrollView>
+    </androidx.core.widget.NestedScrollView>
 </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>

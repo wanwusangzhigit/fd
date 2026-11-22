@@ -13,6 +13,18 @@ object Constants {
     /** TCP 端口（Wi-Fi Direct）— 客户端上报自身 IP 的信令通道（组主侧监听） */
     const val WIFI_REGISTER_PORT = 8989
 
+    /** LAN 设备发现 — UDP 广播 beacon 端口（与桌面 native/Discovery.h 一致） */
+    const val DISCOVERY_PORT = 18998
+
+    /** beacon 帧魔数 "WFDn"（与桌面 native/Discovery.cpp 一致） */
+    const val BEACON_MAGIC = "WFDn"
+
+    /** beacon 协议版本 */
+    const val BEACON_VERSION = 1
+
+    /** LAN peer 多久未收到 beacon 视为过期（ms） */
+    const val LAN_PEER_TTL_MS = 6_000L
+
     /** TCP 连接超时（ms） */
     const val WIFI_CONNECT_TIMEOUT_MS = 15_000
 

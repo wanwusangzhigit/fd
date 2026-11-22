@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 横屏：垂直空间紧张，收紧间距与列表高度 -->
+    <dimen name="screen_padding">8dp</dimen>
+    <dimen name="row_spacing">2dp</dimen>
+    <dimen name="list_height">110dp</dimen>
+</resources>

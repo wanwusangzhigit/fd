@@ -22,6 +22,7 @@ import com.example.wifidirect.App
 import com.example.wifidirect.R
 import com.example.wifidirect.databinding.ActivityMainBinding
 import com.example.wifidirect.manager.BluetoothManager
+import com.example.wifidirect.manager.LanDiscoveryManager
 import com.example.wifidirect.manager.WiFiDirectManager
 import com.example.wifidirect.manager.safeName
 import com.example.wifidirect.transfer.BluetoothReceiverConnection
@@ -43,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var wifi: WiFiDirectManager
     private lateinit var bt: BluetoothManager
+    private lateinit var lan: LanDiscoveryManager
     private lateinit var receivedFileManager: ReceivedFileManager
 
     private val deviceAdapter = DeviceAdapter(::onDeviceClicked)
@@ -135,6 +137,7 @@ class MainActivity : AppCompatActivity() {
 
         wifi = WiFiDirectManager(this)
         bt = BluetoothManager(this)
+        lan = LanDiscoveryManager()
         receivedFileManager = ReceivedFileManager(this)
         // 初始化传输历史单例（接收事件会调用 TransferHistory.get()）
         com.example.wifidirect.transfer.TransferHistory.init(applicationContext)
@@ -143,6 +146,7 @@ class MainActivity : AppCompatActivity() {
         setupButtons(savedInstanceState)
         setupSwipeRefresh()
         observeManagers()
+        lan.start()
         observeTransferEvents()
         restoreState(savedInstanceState)
 
@@ -253,6 +257,8 @@ class MainActivity : AppCompatActivity() {
                 bt.clearDiscovered()
                 bt.startDiscovery(this)
             }
+            // LAN 发现常驻；下拉时确保在运行（已运行则幂等跳过）。
+            lan.start()
             // 给一点延迟隐藏刷新动画
             binding.swipeRefresh.postDelayed({
                 binding.swipeRefresh.isRefreshing = false
@@ -264,18 +270,28 @@ class MainActivity : AppCompatActivity() {
         // Wi-Fi Direct peers
         lifecycleScope.launch {
             wifi.peers.collectLatest { peers ->
-                refreshDeviceList(peers = peers, bluetooth = bt.discoveredDevices.value)
+                refreshDeviceList(peers = peers, bluetooth = bt.discoveredDevices.value,
+                    lanPeers = lan.peers.value)
             }
         }
         // Bluetooth discovered + paired
         lifecycleScope.launch {
             bt.discoveredDevices.collectLatest { devices ->
-                refreshDeviceList(peers = wifi.peers.value, bluetooth = devices)
+                refreshDeviceList(peers = wifi.peers.value, bluetooth = devices,
+                    lanPeers = lan.peers.value)
             }
         }
         lifecycleScope.launch {
             bt.pairedDevices.collectLatest { devices ->
-                refreshDeviceList(peers = wifi.peers.value, bluetooth = devices)
+                refreshDeviceList(peers = wifi.peers.value, bluetooth = devices,
+                    lanPeers = lan.peers.value)
+            }
+        }
+        // LAN 广播发现（桌面 native 客户端）
+        lifecycleScope.launch {
+            lan.peers.collectLatest { lanPeers ->
+                refreshDeviceList(peers = wifi.peers.value,
+                    bluetooth = bt.discoveredDevices.value, lanPeers = lanPeers)
             }
         }
         // 启用蓝牙后自动扫描
@@ -373,13 +389,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshDeviceList(
         peers: List<WifiP2pDevice>,
-        bluetooth: List<BluetoothDevice>
+        bluetooth: List<BluetoothDevice>,
+        lanPeers: List<com.example.wifidirect.manager.LanPeer>
     ) {
         val items = mutableListOf<DeviceItem>()
+        lanPeers.forEach { items += DeviceItem.Lan(it.ip, it.name) }
         peers.forEach { items += DeviceItem.Wifi(it) }
         bluetooth.forEach { items += DeviceItem.Bt(it) }
         deviceAdapter.submitList(items)
+        // 空态与列表互斥，避免两者同时占位造成视觉重叠。
         binding.emptyView.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
+        binding.deviceList.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
     }
 
     // ----- 设备点击：选择发送通道 -------------------------------------------
@@ -392,6 +412,13 @@ class MainActivity : AppCompatActivity() {
         when (item) {
             is DeviceItem.Wifi -> onWifiDeviceClicked(item, pendingFiles.toList())
             is DeviceItem.Bt -> onBtDeviceClicked(item.device, pendingFiles.toList())
+            is DeviceItem.Lan -> {
+                // 桌面 native 客户端： beacon 已给出 LAN IP，直接走 TCP 8988。
+                val files = pendingFiles.toList()
+                files.forEach { f -> launchWifiSend(item.ip, f.uri, f.displayName, f.size) }
+                clearPendingFiles()
+                toast(getString(R.string.toast_sending_via_lan, item.name.ifEmpty { item.ip }))
+            }
         }
     }
 
@@ -568,7 +595,13 @@ class MainActivity : AppCompatActivity() {
             }
             refreshSelectedFileLabel()
         }
-        bluetoothServerStarted = savedInstanceState.getBoolean(KEY_BT_SERVER_STARTED, false)
+        // 旋转重建（移除 configChanges 后会发生）：标志恢复为 true，但旧的
+        // 接收 socket 已随 Activity 销毁关闭。重置后重新实际启动服务，避免
+        // ensureBtServerStarted() 因标志已 true 而 early-return 导致收不到文件。
+        if (savedInstanceState.getBoolean(KEY_BT_SERVER_STARTED, false)) {
+            bluetoothServerStarted = false
+            ensureBtServerStarted()
+        }
     }
 
     // ----- 辅助 ---------------------------------------------------------------
@@ -637,6 +670,7 @@ class MainActivity : AppCompatActivity() {
         }
         bt.cleanup()
         wifi.cleanup()
+        lan.cleanup()
     }
 
     companion object {

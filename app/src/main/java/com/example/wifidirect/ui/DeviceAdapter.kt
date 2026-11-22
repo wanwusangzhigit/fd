@@ -35,6 +35,11 @@ sealed class DeviceItem {
         override fun contentIdentity(): String =
             "bt|${device.address}|${device.safeName()}|${try { device.bondState } catch(_: SecurityException) { -1 }}"
     }
+    /** LAN 上通过 UDP beacon 发现的桌面客户端，可直接按 ip 走 TCP 发送。 */
+    data class Lan(val ip: String, val name: String) : DeviceItem() {
+        override val stableId: String get() = "lan:$ip"
+        override fun contentIdentity(): String = "lan|$ip|$name"
+    }
 }
 
 class DeviceAdapter(
@@ -67,6 +72,11 @@ class DeviceAdapter(
                 holder.name.text = d.safeName().ifEmpty { d.address }
                 holder.detail.text = d.address
                 holder.transport.text = ctx.getString(R.string.transport_bt)
+            }
+            is DeviceItem.Lan -> {
+                holder.name.text = item.name.ifEmpty { item.ip }
+                holder.detail.text = item.ip
+                holder.transport.text = ctx.getString(R.string.transport_lan)
             }
         }
         holder.itemView.setOnClickListener { onClick(item) }

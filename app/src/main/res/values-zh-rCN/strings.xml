@@ -112,4 +112,10 @@
     <string name="fail_port_in_use">端口 %1$d 被占用</string>
     <string name="fail_receive">接收失败</string>
     <string name="fail_send">发送失败</string>
+
+    <!-- LAN 设备发现 -->
+    <string name="transport_lan">局域网</string>
+    <string name="lan_discovered">局域网：发现 %1$d 个设备</string>
+    <string name="toast_sending_via_lan">正在通过局域网发送 %1$s…</string>
+    <string name="lan_listening">局域网：发现已开启</string>
 </resources>

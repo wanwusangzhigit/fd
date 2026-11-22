@@ -115,4 +115,10 @@
     <string name="fail_port_in_use">Port %1$d in use</string>
     <string name="fail_receive">Receive failed</string>
     <string name="fail_send">Send failed</string>
+
+    <!-- LAN discovery -->
+    <string name="transport_lan">LAN</string>
+    <string name="lan_discovered">LAN: %1$d device(s) found</string>
+    <string name="toast_sending_via_lan">Sending %1$s via LAN…</string>
+    <string name="lan_listening">LAN: discovery on</string>
 </resources>

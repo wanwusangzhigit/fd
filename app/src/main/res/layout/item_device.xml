@@ -21,6 +21,8 @@
             android:layout_weight="1"
             android:textSize="16sp"
             android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end"
             tools:text="Pixel 7" />
 
         <TextView
@@ -38,5 +40,7 @@
         android:layout_height="wrap_content"
         android:textSize="12sp"
         android:textColor="@android:color/darker_gray"
+        android:maxLines="1"
+        android:ellipsize="end"
         tools:text="AA:BB:CC:DD:EE:FF" />
 </LinearLayout>
