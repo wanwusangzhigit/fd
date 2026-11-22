@@ -41,7 +41,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build ccache \
-            libbluetooth-dev libncursesw5-dev qt6-base-dev
+            libbluetooth-dev libncursesw5-dev qt6-base-dev libgl1-mesa-dev
 
       - name: Configure (Release)
         run: cmake -S . -B ../build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
