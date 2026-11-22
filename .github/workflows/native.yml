@@ -41,13 +41,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build ccache \
-            libbluetooth-dev libncursesw5-dev
+            libbluetooth-dev libncursesw5-dev qt6-base-dev
 
       - name: Configure (Release)
         run: cmake -S . -B ../build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build ../build/native -j
+
+      # Both front-ends are built: the ncurses TUI and, when Qt6 dev headers
+      # are installed (they are, via qt6-base-dev above), the desktop GUI.
+      - name: Verify UI executables
+        run: |
+          test -f ../build/native/wfd_tui
+          test -f ../build/native/wfd_linux
+          ls -la ../build/native/wfd_*
 
       # No `-E discovery` any more. tests/test_discovery.cpp soft-skips (exit 0)
       # when the broadcast bind is refused or no peer answers, so it costs

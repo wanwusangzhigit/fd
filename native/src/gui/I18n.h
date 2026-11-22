@@ -18,59 +18,10 @@
 
 #include <string>
 
+#include "Strings.h"   // Lang / Str enums + bilingual UTF-8 tables (single source)
+
 namespace wfd {
 namespace gui {
-
-enum class Lang { En, Zh };
-
-// One key per localized text point in GuiApp.cpp.
-enum class Str {
-    // Window / group boxes
-    AppTitle,           // "wfd - file transfer"
-    GroupPeers,
-    GroupTransfers,
-    GroupLog,
-    // Buttons
-    BtnPickFiles,
-    BtnSendSelected,
-    BtnCancel,
-    BtnReceiveFolder,
-    ChkTcpListen,
-    ChkBtListen,
-    BtnBtScan,
-    // Transfer-table column headers
-    ColDir, ColState, ColFile, ColPeer, ColProgress,
-    ColTransferred, ColRate, ColEta, ColDetail,
-    // Peers / Log column headers
-    PeerName, PeerAddress, PeerKind, PeerSeen,
-    LogTime, LogMessage,
-    // Menu
-    MenuLanguage, MenuChinese, MenuEnglish,
-    // Status bar templates
-    StatusConn,         // "TCP: %1   BT: %2   beacon: %3"
-    StatusCounts,       // "peers: %1   running: %2"
-    StatusReceive,      // "receive: %1"
-    StatusOnPort,       // "on %1"
-    StatusOn,           // "on"
-    StatusOff,          // "off"
-    // Window title template
-    TitleTemplate,      // "wfd - %1 peers, %2 transfers, receive -> %3"
-    // Task states
-    StateWait, StateRun, StateOk, StateFail, StateCancel,
-    // Peer kinds
-    PeerLan, PeerBtPaired, PeerBtFound,
-    // Peer staleness
-    PeerStale, PeerLive,
-    // Direction
-    DirOut, DirIn,
-    // Fixed detail words
-    DetailSha256Prefix,     // "sha256 %1"
-    DetailCanceling,        // "canceling... "
-    DetailSha256Verified,   // "sha256 verified"
-    DetailNoHashTrailer,    // "no hash trailer"
-
-    Count
-};
 
 class I18n {
 public:

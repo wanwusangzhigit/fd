@@ -131,6 +131,26 @@ if(WFD_PLATFORM_LINUX)
     else()
         message(STATUS "ncurses not found; skipping wfd_tui (install libncursesw5-dev)")
     endif()
+
+    # Qt6 desktop GUI. QUIET + soft skip so a host without the dev package can
+    # still build wfd_core and run the unit tests (same semantics as ncurses).
+    find_package(Qt6 QUIET COMPONENTS Core Gui Widgets)
+    if(Qt6_FOUND AND TARGET Qt6::Widgets)
+        add_executable(wfd_linux
+            src/linux/main.cpp
+            src/linux/LinuxGuiApp.cpp
+            src/linux/TransferDelegate.cpp
+            src/linux/I18nQt.cpp
+        )
+        set_target_properties(wfd_linux PROPERTIES AUTOMOC ON)
+        target_include_directories(wfd_linux PRIVATE src/linux src/gui)
+        target_link_libraries(wfd_linux PRIVATE
+            wfd_core Qt6::Core Qt6::Gui Qt6::Widgets)
+        target_compile_definitions(wfd_linux PRIVATE WFD_HAVE_QT6=1)
+        message(STATUS "Qt6 found: building wfd_linux desktop GUI")
+    else()
+        message(STATUS "Qt6 not found; skipping wfd_linux (install qt6-base-dev)")
+    endif()
 endif()
 
 # --- Windows desktop GUI ---------------------------------------------------
